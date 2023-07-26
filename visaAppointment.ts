@@ -19,6 +19,8 @@ dotenv.config();
     process.exit(1);
   }
 
+  console.error("Process started");
+
   await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
 
   // Fill login form
