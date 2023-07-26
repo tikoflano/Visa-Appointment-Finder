@@ -1,0 +1,8 @@
+version: '3'
+services:
+  visa-appointment:
+    build: .
+    image: visa-appointment
+    env_file:
+      - .env
+  
