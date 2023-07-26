@@ -88,7 +88,7 @@ dotenv.config();
   const dates = await response.json();
 
   if (!dates.length) {
-    console.log("No dates available");
+    console.log("No appointments available");
     process.exit(1);
   }
 
@@ -96,14 +96,13 @@ dotenv.config();
 
   // Check if there is an earlier date available
   if (currentDate <= firstDate) {
-    console.log("No earlier date available", firstDate);
+    console.log(`No earlier date available, the earliest is ${firstDate}`);
   } else {
     const dateDiff =
       (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24);
 
     console.log(
-      `Appointment available ${dateDiff} days(s) earlier... GO GO GO!`,
-      firstDate,
+      `Appointment available on ${firstDate}, ${dateDiff} days(s) earlier than your current one... GO GO GO!`,
     );
 
     // Send whatsapp notification
