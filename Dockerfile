@@ -1,11 +1,14 @@
-FROM node:20-alpine
+FROM node:20-buster
 
-WORKDIR /usr/local/visaAppointment
+WORKDIR /usr/local/visa-appointment
+
+# Install chromium dependencies
+RUN apt-get update && apt-get -y install chromium
+RUN npx playwright install chromium
 
 COPY ./ .
 
 RUN npm install
-RUN npx playwright install chromium
 RUN npm run build
 
 ENTRYPOINT ["node"]

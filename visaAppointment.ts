@@ -16,7 +16,7 @@ dotenv.config();
 
   if (!user_email || !user_password) {
     console.error("Missing credentials");
-    return;
+    process.exit(1);
   }
 
   await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
@@ -30,11 +30,17 @@ dotenv.config();
   await page.click(".button[type='submit']");
 
   // Check if logged in correctly
-  const selectors = ["span.visa-type-indicator", "form .error", ".infoPopUp"];
+  const selectors = [
+    "a[href='/en-cl/niv/users/sign_out']",
+    "form .error",
+    ".infoPopUp",
+  ];
 
   const postLoginSelector = await Promise.race(
     selectors.map((selector) =>
-      page.waitForSelector(selector).then(() => selector),
+      page
+        .waitForSelector(selector, { state: "attached" })
+        .then(() => selector),
     ),
   );
 
@@ -59,7 +65,7 @@ dotenv.config();
 
   if (!consularAppointmentDetails) {
     console.log("Current appointment not found");
-    process.exit();
+    process.exit(1);
   }
 
   const currentDate = new Date(
@@ -83,7 +89,7 @@ dotenv.config();
 
   if (!dates.length) {
     console.log("No dates available");
-    process.exit();
+    process.exit(1);
   }
 
   const firstDate = new Date(dates[0].date);
