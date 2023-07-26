@@ -4,13 +4,6 @@ import twilio from "twilio";
 
 dotenv.config();
 
-interface dateOptions {
-  timeZone: "UTC";
-  month: "long";
-  day: "numeric";
-  year: "numeric";
-}
-
 (async () => {
   const browser = await chromium.launch({
     headless: process.argv[2] !== "--headed",
@@ -18,7 +11,6 @@ interface dateOptions {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  const cur_date = new Date(process.env.CUR_DATE + "");
   const user_email = process.env.VISA_USER_EMAIL;
   const user_password = process.env.VISA_USER_PASSWORD;
 
@@ -27,7 +19,7 @@ interface dateOptions {
     return;
   }
 
-  await page.goto("https://ais.usvisa-info.com/es-cl/niv/users/sign_in");
+  await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
 
   // Fill login form
   await page.fill("#user_email", user_email);
@@ -51,10 +43,37 @@ interface dateOptions {
     process.exit(1);
   }
 
-  await page.waitForURL("https://ais.usvisa-info.com/es-cl/niv/groups/*");
+  console.log("Logged in successfully");
 
+  await page.waitForURL("https://ais.usvisa-info.com/en-cl/niv/groups/*");
+
+  // Get current appointment date
+  const getDirectionsLink = page.locator(
+    `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
+  );
+  const consularAppointment = page
+    .locator(".consular-appt")
+    .filter({ has: getDirectionsLink });
+
+  const consularAppointmentDetails = await consularAppointment.innerText();
+
+  if (!consularAppointmentDetails) {
+    console.log("Current appointment not found");
+    process.exit();
+  }
+
+  const currentDate = new Date(
+    consularAppointmentDetails.substring(
+      consularAppointmentDetails.indexOf(":") + 2,
+      consularAppointmentDetails.lastIndexOf(","),
+    ),
+  );
+
+  console.log(`Your current appointment is on ${currentDate}`);
+
+  // Get available dates
   await page.goto(
-    `https://ais.usvisa-info.com/es-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
+    `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
   );
 
   await page.click("input[type='submit']");
@@ -67,28 +86,28 @@ interface dateOptions {
     process.exit();
   }
 
-  const first_date = new Date(dates[0].date);
+  const firstDate = new Date(dates[0].date);
 
-  const dateOptions: dateOptions = {
-    timeZone: "UTC",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  };
-  const first_date_str = first_date.toLocaleDateString("en-US", dateOptions); // "June 1, 2019"
-
-  if (cur_date <= first_date) {
-    console.log("No newer date available", first_date_str);
+  // Check if there is an earlier date available
+  if (currentDate <= firstDate) {
+    console.log("No earlier date available", firstDate);
   } else {
-    console.log("Newer dates available... GO GO GO!", first_date_str);
+    const dateDiff =
+      (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24);
 
+    console.log(
+      `Appointment available ${dateDiff} days(s) earlier... GO GO GO!`,
+      firstDate,
+    );
+
+    // Send whatsapp notification
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN,
     );
 
     await client.messages.create({
-      body: `New visa appointment date available on ${first_date_str}. Go to https://ais.usvisa-info.com/es-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
+      body: `There is a visa appointment available on ${firstDate}, ${dateDiff} days(s) earlier than your current one. Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it`,
       from: `whatsapp:${process.env.TWILIO_WHATSAPP_PHONE_NUMBER}`,
       to: `whatsapp:${process.env.NOTIFICATION_PHONE_NUMBER}`,
     });
@@ -98,3 +117,15 @@ interface dateOptions {
   await context.close();
   await browser.close();
 })();
+
+Date.prototype.toString = function () {
+  const dateOptions: Intl.DateTimeFormatOptions = {
+    timeZone: "UTC",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    weekday: "long",
+  };
+
+  return this.toLocaleDateString("en-US", dateOptions); // "June 1, 2019"
+};
