@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import dotenv from "dotenv";
 import twilio from "twilio";
+import { MessageStatus } from "twilio/lib/rest/api/v2010/account/message";
 
 dotenv.config();
 
@@ -104,7 +105,7 @@ dotenv.config();
       (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24);
 
     console.log(
-      `Appointment available on ${firstDate}, ${dateDiff} days(s) earlier than your current one... GO GO GO!`,
+      `Earlier appointment available on ${firstDate} (${dateDiff} day(s) earlier)... GO GO GO!`,
     );
 
     // Send whatsapp notification
@@ -113,11 +114,36 @@ dotenv.config();
       process.env.TWILIO_AUTH_TOKEN,
     );
 
-    await client.messages.create({
-      body: `There is a visa appointment available on ${firstDate}, ${dateDiff} days(s) earlier than your current one. Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it`,
+    let twilioMessage = await client.messages.create({
+      body: `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it.`,
       from: `whatsapp:${process.env.TWILIO_WHATSAPP_PHONE_NUMBER}`,
       to: `whatsapp:${process.env.NOTIFICATION_PHONE_NUMBER}`,
     });
+
+    try {
+      await new Promise<MessageStatus>(async (resolve, reject) => {
+        let fulfilled = false;
+
+        const timer = setTimeout(() => {
+          fulfilled = true;
+          reject(twilioMessage.status);
+        }, 10000);
+
+        while (twilioMessage.status !== "delivered" && !fulfilled) {
+          twilioMessage = await twilioMessage.fetch();
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+
+        clearTimeout(timer);
+        resolve(twilioMessage.status);
+      });
+
+      console.log("WhatsApp notification sent");
+    } catch (messageStatus) {
+      console.log(
+        `The WhatsApp notification seems to have failed (status: ${messageStatus}). Visit https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn to check if it is set up correctly`,
+      );
+    }
   }
 
   // Teardown
