@@ -4,6 +4,7 @@ import twilio from "twilio";
 import { MessageStatus } from "twilio/lib/rest/api/v2010/account/message";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -178,6 +179,25 @@ dotenv.config();
           `The WhatsApp notification seems to have failed (status: ${messageStatus}). Visit https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn to check if it is set up correctly`,
         );
       }
+
+      // Send email
+      const transporter = nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 587,
+        auth: {
+          user: process.env.GMAIL_APP_USER,
+          pass: process.env.GMAIL_APP_PASSWORD,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
+        to: process.env.EMAIL_DESTINATION,
+        subject: "Earlier visa appointment available",
+        html: `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it.`,
+      });
+
+      console.log("Email notification sent");
     }
   } catch (error) {
     let message = "Unknown Error";
