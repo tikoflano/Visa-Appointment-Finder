@@ -87,23 +87,23 @@ dotenv.config();
 
     await page.waitForURL("https://ais.usvisa-info.com/en-cl/niv/groups/*");
 
-    // Get current appointment date
-    const getDirectionsLink = page.locator(
-      `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
-    );
-    const consularAppointment = page
-      .locator(".consular-appt")
-      .filter({ has: getDirectionsLink });
-
-    const consularAppointmentDetails = await consularAppointment.innerText();
-
-    if (!consularAppointmentDetails) {
-      throw Error("Current appointment not found");
-    }
-
     if (currentDate) {
       console.log(`Appointment date manually set to ${currentDate}`);
     } else {
+      // Get current appointment date
+      const getDirectionsLink = page.locator(
+        `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
+      );
+      const consularAppointment = page
+        .locator(".consular-appt")
+        .filter({ has: getDirectionsLink });
+
+      const consularAppointmentDetails = await consularAppointment.innerText();
+
+      if (!consularAppointmentDetails) {
+        throw Error("Current appointment not found");
+      }
+
       currentDate = new Date(
         consularAppointmentDetails.substring(
           consularAppointmentDetails.indexOf(":") + 2,
