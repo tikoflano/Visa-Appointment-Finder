@@ -101,8 +101,9 @@ dotenv.config();
   if (currentDate <= firstDate) {
     console.log(`No earlier date available, the earliest is ${firstDate}`);
   } else {
-    const dateDiff =
-      (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24);
+    const dateDiff = Math.round(
+      (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24),
+    );
 
     console.log(
       `Earlier appointment available on ${firstDate} (${dateDiff} day(s) earlier)... GO GO GO!`,
