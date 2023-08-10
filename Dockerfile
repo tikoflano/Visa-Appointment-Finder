@@ -11,5 +11,4 @@ COPY ./ .
 RUN npm install
 RUN npm run build
 
-ENTRYPOINT ["node"]
-CMD ["build/visaAppointment.js"]
+ENTRYPOINT ["node", "build/visaAppointment.js", "-h"]
