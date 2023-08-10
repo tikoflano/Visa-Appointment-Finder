@@ -1,7 +1,5 @@
 import { Browser, BrowserContext, chromium } from "playwright";
 import dotenv from "dotenv";
-import twilio from "twilio";
-import { MessageStatus } from "twilio/lib/rest/api/v2010/account/message";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
 import nodemailer from "nodemailer";
@@ -20,23 +18,43 @@ dotenv.config();
           describe: "Headless mode.",
           default: false,
         },
+        notification: {
+          type: "boolean",
+          describe: "Send email notification.",
+          default: true,
+        },
         date: {
           type: "string",
           alias: "d",
           describe:
-            "Provide a current date. If not provided, the bot will parse your current appointment date. Fomat: MM/DD/YYYY",
+            "Set the current appointment date. If not set, the bot will get your current one. Fomat: MM/DD/YYYY",
+          default: "",
+        },
+        minDate: {
+          type: "string",
+          alias: ["m", "min-date"],
+          describe:
+            "If set, the available appointment must be later than this date. Fomat: MM/DD/YYYY",
           default: "",
         },
       })
       .parseSync();
 
     let currentDate: Date | undefined;
+    let minDate: Date | undefined;
 
     // Validate input
     if (argv.date) {
       currentDate = new Date(argv.date);
       if (isNaN(+currentDate)) {
         throw Error("Invalid current date provided");
+      }
+    }
+
+    if (argv.minDate) {
+      minDate = new Date(argv.minDate);
+      if (isNaN(+minDate)) {
+        throw Error("Invalid minDate provided");
       }
     }
 
@@ -123,63 +141,43 @@ dotenv.config();
     await page.click("input[type='submit']");
 
     const response = await page.waitForResponse(/appointment\/days/);
-    const dates = await response.json();
+    const datesStr: { date: string }[] = await response.json();
 
-    if (!dates.length) {
+    if (!datesStr.length) {
       throw Error("No appointments available");
     }
 
-    const firstDate = new Date(dates[0].date);
+    const dates = datesStr.map(({ date }) => new Date(date));
+
+    let earlierDates = dates.filter((date) => date <= currentDate!);
+
+    if (minDate) {
+      console.log(`Min date to consider is ${minDate}`);
+      earlierDates = earlierDates.filter((date) => date >= minDate!);
+    }
 
     // Check if there is an earlier date available
-    if (currentDate <= firstDate) {
-      console.log(`No earlier date available, the earliest is ${firstDate}`);
-    } else {
-      const dateDiff = Math.round(
-        (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24),
-      );
+    if (!earlierDates.length) {
+      console.log("No earlier date available");
+    }
 
-      console.log(
-        `Earlier appointment available on ${firstDate} (${dateDiff} day(s) earlier)... GO GO GO!`,
-      );
+    const firstDate = earlierDates[0];
 
-      // Send whatsapp notification
-      const client = twilio(
-        process.env.TWILIO_ACCOUNT_SID,
-        process.env.TWILIO_AUTH_TOKEN,
-      );
+    const dateDiff = Math.round(
+      (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24),
+    );
 
-      let twilioMessage = await client.messages.create({
-        body: `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it.`,
-        from: `whatsapp:${process.env.TWILIO_WHATSAPP_PHONE_NUMBER}`,
-        to: `whatsapp:${process.env.NOTIFICATION_PHONE_NUMBER}`,
-      });
+    console.log(
+      `Earlier appointment available on ${firstDate} (${dateDiff} day(s) earlier)`,
+    );
 
-      try {
-        await new Promise<MessageStatus>(async (resolve, reject) => {
-          let fulfilled = false;
+    let extraDates = "";
+    if (earlierDates.length > 1) {
+      extraDates = earlierDates.slice(1).join(",");
+      console.log(`Other available dates: ${extraDates}`);
+    }
 
-          const timer = setTimeout(() => {
-            fulfilled = true;
-            reject(twilioMessage.status);
-          }, 10000);
-
-          while (twilioMessage.status !== "delivered" && !fulfilled) {
-            twilioMessage = await twilioMessage.fetch();
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          }
-
-          clearTimeout(timer);
-          resolve(twilioMessage.status);
-        });
-
-        console.log("WhatsApp notification sent");
-      } catch (messageStatus) {
-        console.log(
-          `The WhatsApp notification seems to have failed (status: ${messageStatus}). Visit https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn to check if it is set up correctly`,
-        );
-      }
-
+    if (argv.notification) {
       // Send email
       const transporter = nodemailer.createTransport({
         host: "smtp.gmail.com",
@@ -194,10 +192,14 @@ dotenv.config();
         from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
         to: process.env.EMAIL_DESTINATION,
         subject: "Earlier visa appointment available",
-        html: `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it.`,
+        html:
+          `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). 
+        Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it. ` +
+          (extraDates ? `Other available dates: ${extraDates}` : ""),
       });
-
       console.log("Email notification sent");
+    } else {
+      console.log("Email notification skipped");
     }
   } catch (error) {
     let message = "Unknown Error";

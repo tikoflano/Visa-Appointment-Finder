@@ -21,7 +21,6 @@
     "dotenv": "^16.0.1",
     "nodemailer": "^6.9.4",
     "playwright": "^1.36.1",
-    "twilio": "^3.77.2",
     "yargs": "^17.7.2"
   }
 }
