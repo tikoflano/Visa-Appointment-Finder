@@ -25,4 +25,7 @@ You will need to set up an App Password.
 - `docker build -t visa .`
 - `docker run --rm --env-file .env visa`
 
-You can pass extra flags, Eg: `docker run --rm --env-file .env visa --notification=false`
+You can pass extra flags, Eg: `docker run --rm --env-file .env visa --notification=false`.
+
+**NOTE:** when calling the docker command from a different folder (like when running a cron job)
+you need to set the full path for the .env file.
