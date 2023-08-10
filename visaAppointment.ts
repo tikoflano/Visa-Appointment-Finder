@@ -159,6 +159,7 @@ dotenv.config();
     // Check if there is an earlier date available
     if (!earlierDates.length) {
       console.log("No earlier date available");
+      return;
     }
 
     const firstDate = earlierDates[0];
