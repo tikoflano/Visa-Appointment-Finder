@@ -18,8 +18,11 @@ You will need to set up an App Password.
 - `npm run build`
 - `node build/visaAppointment.js`
 
-## Using Docker Compose
+## Using Docker
 
 - `cp .env.dist .env`
 - `nano .env`
-- `docker compose run --rm visa-appointment`
+- `docker build -t visa .`
+- `docker run --rm --env-file .env visa`
+
+You can pass extra flags, Eg: `docker run --rm --env-file .env visa --notification=false`
