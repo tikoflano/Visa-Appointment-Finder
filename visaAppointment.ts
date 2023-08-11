@@ -6,6 +6,11 @@ import nodemailer from "nodemailer";
 
 dotenv.config();
 
+enum Action {
+  None = "none",
+  Notify = "notify",
+}
+
 (async () => {
   let browser: Browser | undefined, context: BrowserContext | undefined;
 
@@ -18,10 +23,12 @@ dotenv.config();
           describe: "Headless mode.",
           default: false,
         },
-        notification: {
-          type: "boolean",
-          describe: "Send email notification.",
-          default: true,
+        action: {
+          type: "string",
+          alias: "a",
+          choices: Object.values(Action),
+          describe: "What to do when an earlier appointment date is found.",
+          default: Action.None,
         },
         date: {
           type: "string",
@@ -178,7 +185,7 @@ dotenv.config();
       console.log(`Other available dates: ${extraDates}`);
     }
 
-    if (argv.notification) {
+    if (argv.action === Action.Notify) {
       // Send email
       const transporter = nodemailer.createTransport({
         host: "smtp.gmail.com",
@@ -200,7 +207,7 @@ dotenv.config();
       });
       console.log("Email notification sent");
     } else {
-      console.log("Email notification skipped");
+      console.log("No action taken");
     }
   } catch (error) {
     let message = "Unknown Error";
