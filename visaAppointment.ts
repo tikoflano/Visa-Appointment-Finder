@@ -45,6 +45,7 @@ enum Action {
           default: "",
         },
       })
+      .strict()
       .parseSync();
 
     let maxDate: Date | undefined;
