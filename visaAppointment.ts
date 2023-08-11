@@ -149,7 +149,7 @@ dotenv.config();
 
     const dates = datesStr.map(({ date }) => new Date(date));
 
-    let earlierDates = dates.filter((date) => date <= currentDate!);
+    let earlierDates = dates.filter((date) => date < currentDate!);
 
     if (minDate) {
       console.log(`Min date to consider is ${minDate}`);
