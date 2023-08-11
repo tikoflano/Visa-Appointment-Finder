@@ -174,7 +174,7 @@ enum Action {
 
     let extraDates = "";
     if (possibleDates.length > 1) {
-      extraDates = possibleDates.slice(1).join(",");
+      extraDates = possibleDates.slice(1).join(" / ");
       console.log(`Other available appointments: ${extraDates}`);
     }
 
