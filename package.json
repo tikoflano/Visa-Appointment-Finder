@@ -1,7 +1,7 @@
 {
-  "name": "visa-appointment-checker",
+  "name": "visa-appointment",
   "version": "1.0.0",
-  "description": "Notifies via Whatsapp when an earlier appointment date is available",
+  "description": "Utility tool for finding visa appointment dates for reschedule.",
   "main": "index.js",
   "scripts": {
     "build": "tsc",

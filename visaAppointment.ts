@@ -27,34 +27,34 @@ enum Action {
           type: "string",
           alias: "a",
           choices: Object.values(Action),
-          describe: "What to do when an earlier appointment date is found.",
+          describe: "What to do when an appointment is found.",
           default: Action.None,
         },
-        date: {
+        maxDate: {
           type: "string",
-          alias: "d",
+          alias: "max-date",
           describe:
-            "Set the current appointment date. If not set, the bot will get your current one. Fomat: MM/DD/YYYY",
+            "If set, the appointment must be before this date. If not set, it will use your current appointment date. Fomat: MM/DD/YYYY",
           default: "",
         },
         minDate: {
           type: "string",
-          alias: ["m", "min-date"],
+          alias: "min-date",
           describe:
-            "If set, the available appointment must be later than this date. Fomat: MM/DD/YYYY",
+            "If set, the appointment must be after or equal to this date. Fomat: MM/DD/YYYY",
           default: "",
         },
       })
       .parseSync();
 
-    let currentDate: Date | undefined;
+    let maxDate: Date | undefined;
     let minDate: Date | undefined;
 
     // Validate input
     if (argv.date) {
-      currentDate = new Date(argv.date);
-      if (isNaN(+currentDate)) {
-        throw Error("Invalid current date provided");
+      maxDate = new Date(argv.maxDate);
+      if (isNaN(+maxDate)) {
+        throw Error("Invalid maxDate date provided");
       }
     }
 
@@ -113,10 +113,8 @@ enum Action {
 
     await page.waitForURL("https://ais.usvisa-info.com/en-cl/niv/groups/*");
 
-    if (currentDate) {
-      console.log(`Appointment date manually set to ${currentDate}`);
-    } else {
-      // Get current appointment date
+    if (!maxDate) {
+      // Use current appointment date
       const getDirectionsLink = page.locator(
         `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
       );
@@ -130,17 +128,17 @@ enum Action {
         throw Error("Current appointment not found");
       }
 
-      currentDate = new Date(
+      maxDate = new Date(
         consularAppointmentDetails.substring(
           consularAppointmentDetails.indexOf(":") + 2,
           consularAppointmentDetails.lastIndexOf(","),
         ),
       );
-
-      console.log(`Your current appointment is on ${currentDate}`);
     }
 
-    // Get available dates
+    console.log(`Searching for appointments before ${maxDate}`);
+
+    // Get available appointments
     await page.goto(
       `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
     );
@@ -148,41 +146,35 @@ enum Action {
     await page.click("input[type='submit']");
 
     const response = await page.waitForResponse(/appointment\/days/);
-    const datesStr: { date: string }[] = await response.json();
+    const appointments: { date: string }[] = await response.json();
 
-    if (!datesStr.length) {
+    if (!appointments.length) {
       throw Error("No appointments available");
     }
 
-    const dates = datesStr.map(({ date }) => new Date(date));
+    const dates = appointments.map(({ date }) => new Date(date));
 
-    let earlierDates = dates.filter((date) => date < currentDate!);
+    let possibleDates = dates.filter((date) => date < maxDate!);
 
     if (minDate) {
-      console.log(`Min date to consider is ${minDate}`);
-      earlierDates = earlierDates.filter((date) => date >= minDate!);
+      console.log(`Filtering appointments before ${minDate}`);
+      possibleDates = possibleDates.filter((date) => date >= minDate!);
     }
 
-    // Check if there is an earlier date available
-    if (!earlierDates.length) {
-      console.log("No earlier date available");
+    // Check if there is a date available
+    if (!possibleDates.length) {
+      console.log("No appointment available");
       return;
     }
 
-    const firstDate = earlierDates[0];
+    const firstDate = possibleDates[0];
 
-    const dateDiff = Math.round(
-      (currentDate.getTime() - firstDate.getTime()) / (1000 * 3600 * 24),
-    );
-
-    console.log(
-      `Earlier appointment available on ${firstDate} (${dateDiff} day(s) earlier)`,
-    );
+    console.log(`Appointment available on ${firstDate}`);
 
     let extraDates = "";
-    if (earlierDates.length > 1) {
-      extraDates = earlierDates.slice(1).join(",");
-      console.log(`Other available dates: ${extraDates}`);
+    if (possibleDates.length > 1) {
+      extraDates = possibleDates.slice(1).join(",");
+      console.log(`Other available appointments: ${extraDates}`);
     }
 
     if (argv.action === Action.Notify) {
@@ -199,11 +191,11 @@ enum Action {
       await transporter.sendMail({
         from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
         to: process.env.EMAIL_DESTINATION,
-        subject: "Earlier visa appointment available",
+        subject: "Visa appointment available",
         html:
-          `There is an earlier visa appointment available on ${firstDate} (${dateDiff} day(s) earlier than your current one). 
+          `There is a visa appointment available on ${firstDate}. 
         Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it. ` +
-          (extraDates ? `Other available dates: ${extraDates}` : ""),
+          (extraDates ? `Other available appointments: ${extraDates}` : ""),
       });
       console.log("Email notification sent");
     } else {
