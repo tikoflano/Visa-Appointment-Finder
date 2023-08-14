@@ -7,8 +7,8 @@ import nodemailer from "nodemailer";
 dotenv.config();
 
 enum Action {
-  None = "none",
   Notify = "notify",
+  Reschedule = "reschedule",
 }
 
 (async () => {
@@ -24,24 +24,24 @@ enum Action {
           default: false,
         },
         action: {
-          type: "string",
+          type: "array",
           alias: "a",
           choices: Object.values(Action),
           describe: "What to do when an appointment is found.",
-          default: Action.None,
+          default: [] as Action[],
         },
         maxDate: {
           type: "string",
           alias: "max-date",
           describe:
-            "If set, the appointment must be before this date. If not set, it will use your current appointment date. Fomat: MM/DD/YYYY",
+            "If set, the appointment must be before this date. If not set, it will use your current appointment date. Format: MM/DD/YYYY",
           default: "",
         },
         minDate: {
           type: "string",
           alias: "min-date",
           describe:
-            "If set, the appointment must be after or equal to this date. Fomat: MM/DD/YYYY",
+            "If set, the appointment must be after or at this date. Format: MM/DD/YYYY",
           default: "",
         },
       })
@@ -52,7 +52,7 @@ enum Action {
     let minDate: Date | undefined;
 
     // Validate input
-    if (argv.date) {
+    if (argv.maxDate) {
       maxDate = new Date(argv.maxDate);
       if (isNaN(+maxDate)) {
         throw Error("Invalid maxDate date provided");
@@ -158,7 +158,7 @@ enum Action {
     let possibleDates = dates.filter((date) => date < maxDate!);
 
     if (minDate) {
-      console.log(`Filtering appointments before ${minDate}`);
+      console.log(`Searching for appointments after ${minDate}`);
       possibleDates = possibleDates.filter((date) => date >= minDate!);
     }
 
@@ -178,7 +178,7 @@ enum Action {
       console.log(`Other available appointments: ${extraDates}`);
     }
 
-    if (argv.action === Action.Notify) {
+    if (argv.action.includes(Action.Notify)) {
       // Send email
       const transporter = nodemailer.createTransport({
         host: "smtp.gmail.com",
@@ -199,6 +199,32 @@ enum Action {
           (extraDates ? `Other available appointments: ${extraDates}` : ""),
       });
       console.log("Email notification sent");
+    } else if (argv.action.includes(Action.Reschedule)) {
+      console.log(`Rescheduling appointment to ${firstDate}`);
+
+      const year = firstDate.getFullYear();
+      const month = `${firstDate.getUTCMonth() + 1}`.padStart(2, "0");
+      const day = `${firstDate.getUTCDate()}`.padStart(2, "0");
+
+      await page
+        .locator("#appointments_consulate_appointment_date")
+        .evaluate(
+          (el: HTMLInputElement, date: string) => (el.value = date),
+          `${year}-${month}-${day}`,
+        );
+
+      await page.click("#appointments_consulate_appointment_date");
+      await page.click("a.ui-state-default.ui-state-active");
+
+      await page
+        .locator("#appointments_consulate_appointment_time")
+        .selectOption({ index: 1 });
+
+      await page.click("#appointments_submit");
+      await page.getByText("Confirm").click();
+      console.log(
+        `Rescheduling completed, the new appointment date is ${firstDate}`,
+      );
     } else {
       console.log("No action taken");
     }
