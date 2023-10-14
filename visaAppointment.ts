@@ -178,6 +178,11 @@ enum Action {
       console.log(`Other available appointments: ${extraDates}`);
     }
 
+    if (!argv.action.length) {
+      console.log("No action taken");
+      return;
+    }
+
     if (argv.action.includes(Action.Notify)) {
       // Send email
       const transporter = nodemailer.createTransport({
@@ -199,7 +204,9 @@ enum Action {
           (extraDates ? `Other available appointments: ${extraDates}` : ""),
       });
       console.log("Email notification sent");
-    } else if (argv.action.includes(Action.Reschedule)) {
+    }
+
+    if (argv.action.includes(Action.Reschedule)) {
       console.log(`Rescheduling appointment to ${firstDate}`);
 
       const year = firstDate.getFullYear();
@@ -225,8 +232,6 @@ enum Action {
       console.log(
         `Rescheduling completed, the new appointment date is ${firstDate}`,
       );
-    } else {
-      console.log("No action taken");
     }
   } catch (error) {
     let message = "Unknown Error";
