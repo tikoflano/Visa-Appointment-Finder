@@ -1,8 +1,13 @@
 # Visa Appointment Finder
 
-## Mail Notification
+This project was created to help getting a Visa appointment in the Chilean consulate rescheduled to the desired date.
 
-You will need to set up an App Password.
+## Getting started
+
+- `cp .env.dist .env`
+- `nano .env` and set at least the `VISA_*` variables.
+
+To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 
 - Go to https://myaccount.google.com/signinoptions/two-step-verification
 - Enable 2 factor authentication
@@ -10,21 +15,24 @@ You will need to set up an App Password.
 - Create a new password for the email app using "other" device.
 - Set this password in the .env file
 
-## Running Locally
+## Run the script
 
-- `nvm install`
+### Locally
+
+- `nvm install` (ignore if you have Node v20 installed)
 - `npm install`
 - `npm run build`
 - `node build/visaAppointment.js`
 
-## Using Docker
+### Using Docker
 
-- `cp .env.dist .env`
-- `nano .env`
-- `docker build -t visa .`
-- `docker run --rm --env-file .env visa`
+- `./run.sh`
 
-You can pass extra flags, Eg: `docker run --rm --env-file .env visa --help`.
+However you execute the script, you can pass extra flags. Eg: `node build/visaAppointment.js --help` or `./run.sh --help`.
+By default it runs with the `-h` (headless mode) flag when running using Docker.
 
-**NOTE:** when calling the docker command from a different folder (like when running a cron job)
-you need to set the full path for the .env file.
+## View logs
+
+You can view the latest log entries with:
+
+`sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"`

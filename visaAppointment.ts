@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
 import nodemailer from "nodemailer";
+import sqlite3 from "sqlite3";
+import { Database, open } from "sqlite";
 
 dotenv.config();
 
@@ -11,10 +13,29 @@ enum Action {
   Reschedule = "reschedule",
 }
 
+let db: Database<sqlite3.Database, sqlite3.Statement>;
+
 (async () => {
+  db = await open({
+    filename: "./db.sqlite",
+    driver: sqlite3.Database,
+  });
+
   let browser: Browser | undefined, context: BrowserContext | undefined;
 
   try {
+    await db.run(
+      `
+      CREATE TABLE IF NOT EXISTS 
+      log (
+        id INTEGER PRIMARY KEY,
+        timestamp DATE DEFAULT (datetime('now','localtime')),
+        visa_process_id INTEGER,
+        message TEXT
+      );
+    `,
+    );
+
     const argv = yargs(hideBin(process.argv))
       .options({
         headless: {
@@ -79,7 +100,7 @@ enum Action {
       throw Error("Missing credentials");
     }
 
-    console.log("Process started");
+    await logInDatabase("Process started");
 
     await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
 
@@ -164,22 +185,22 @@ enum Action {
 
     // Check if there is a date available
     if (!possibleDates.length) {
-      console.log("No appointment available");
+      await logInDatabase("No appointment available");
       return;
     }
 
     const firstDate = possibleDates[0];
 
-    console.log(`Appointment available on ${firstDate}`);
+    await logInDatabase(`Appointment available on ${firstDate}`);
 
     let extraDates = "";
     if (possibleDates.length > 1) {
       extraDates = possibleDates.slice(1).join(" / ");
-      console.log(`Other available appointments: ${extraDates}`);
+      await logInDatabase(`Other available appointments: ${extraDates}`);
     }
 
     if (!argv.action.length) {
-      console.log("No action taken");
+      await logInDatabase("No action taken");
       return;
     }
 
@@ -203,7 +224,7 @@ enum Action {
         Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it. ` +
           (extraDates ? `Other available appointments: ${extraDates}` : ""),
       });
-      console.log("Email notification sent");
+      await logInDatabase("Email notification sent");
     }
 
     if (argv.action.includes(Action.Reschedule)) {
@@ -229,7 +250,7 @@ enum Action {
 
       await page.click("#appointments_submit");
       await page.getByText("Confirm").click();
-      console.log(
+      await logInDatabase(
         `Rescheduling completed, the new appointment date is ${firstDate}`,
       );
     }
@@ -240,9 +261,11 @@ enum Action {
       message = error.message;
     }
 
-    console.error(message);
+    await logInDatabase(message, true);
   } finally {
     // Teardown
+    await db.close();
+
     if (context) {
       await context.close();
     }
@@ -264,3 +287,12 @@ Date.prototype.toString = function () {
 
   return this.toLocaleDateString("en-US", dateOptions); // "June 1, 2019"
 };
+
+async function logInDatabase(message: string, error = false) {
+  await db.run("INSERT INTO log (visa_process_id, message) VALUES (?, ?)", [
+    process.env.VISA_PROCESS_ID,
+    message,
+  ]);
+
+  console[error ? "error" : "log"](message);
+}
