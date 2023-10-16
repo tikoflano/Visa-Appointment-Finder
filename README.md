@@ -28,6 +28,13 @@ To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 
 - `./run.sh`
 
+#### Updating using Docker
+
+- `git pull`
+- `docker build -t visa .`
+
+### Passing flags
+
 However you execute the script, you can pass extra flags. Eg: `node build/visaAppointment.js --help` or `./run.sh --help`.
 By default it runs with the `-h` (headless mode) flag when running using Docker.
 
