@@ -36,6 +36,17 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
     `,
     );
 
+    await db.run(
+      `
+      CREATE TABLE IF NOT EXISTS 
+      heartbeat_notification (
+        id INTEGER PRIMARY KEY,
+        timestamp DATE DEFAULT (datetime('now','localtime')),
+        visa_process_id INTEGER
+      );
+    `,
+    );
+
     const argv = yargs(hideBin(process.argv))
       .options({
         headless: {
@@ -64,6 +75,12 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
           describe:
             "If set, the appointment must be after or at this date. Format: MM/DD/YYYY",
           default: "",
+        },
+        heartbeat: {
+          type: "boolean",
+          alias: "hb",
+          describe: "Enable heartbeat notifications",
+          default: false,
         },
       })
       .strict()
@@ -101,6 +118,45 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
     }
 
     await logInDatabase("Process started");
+
+    if (argv.heartbeat) {
+      if (!process.env.HEARTBEAT_TIME || !process.env.HEARTBEAT_DESTINATION) {
+        throw Error("HEARTBEAT_* environment variable missing");
+      }
+
+      const heartbeat_notification = await db.get(
+        "SELECT * FROM heartbeat_notification WHERE visa_process_id = ? ORDER BY id DESC",
+        [process.env.VISA_PROCESS_ID],
+      );
+
+      console.log(
+        `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
+      );
+
+      if (
+        !heartbeat_notification ||
+        Math.floor(
+          (+new Date() - +new Date(heartbeat_notification["timestamp"])) /
+            1000 /
+            60,
+        ) > parseInt(process.env.HEARTBEAT_TIME)
+      ) {
+        await sendMail(
+          process.env.HEARTBEAT_DESTINATION,
+          "Visa appointment scheduler is running",
+          "This is just to let you know that the script is currently running",
+        );
+
+        console.log("Heartbeat notifcation sent");
+
+        await db.run(
+          "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
+          [process.env.VISA_PROCESS_ID],
+        );
+      } else {
+        console.log("Heartbeat notifcation skipped");
+      }
+    }
 
     await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
 
@@ -205,25 +261,17 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
     }
 
     if (argv.action.includes(Action.Notify)) {
-      // Send email
-      const transporter = nodemailer.createTransport({
-        host: "smtp.gmail.com",
-        port: 587,
-        auth: {
-          user: process.env.GMAIL_APP_USER,
-          pass: process.env.GMAIL_APP_PASSWORD,
-        },
-      });
+      if (!process.env.EMAIL_DESTINATION) {
+        throw Error("Destination address not set");
+      }
 
-      await transporter.sendMail({
-        from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
-        to: process.env.EMAIL_DESTINATION,
-        subject: "Visa appointment available",
-        html:
-          `There is a visa appointment available on ${firstDate}. 
+      await sendMail(
+        process.env.EMAIL_DESTINATION + "",
+        "Visa appointment available",
+        `There is a visa appointment available on ${firstDate}. 
         Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it. ` +
           (extraDates ? `Other available appointments: ${extraDates}` : ""),
-      });
+      );
       await logInDatabase("Email notification sent");
     }
 
@@ -295,4 +343,23 @@ async function logInDatabase(message: string, error = false) {
   ]);
 
   console[error ? "error" : "log"](message);
+}
+
+async function sendMail(to: string, subject: string, html: string) {
+  // Send email
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    auth: {
+      user: process.env.GMAIL_APP_USER,
+      pass: process.env.GMAIL_APP_PASSWORD,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
+    to,
+    subject,
+    html,
+  });
 }
