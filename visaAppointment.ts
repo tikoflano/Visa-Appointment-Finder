@@ -129,7 +129,7 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
         [process.env.VISA_PROCESS_ID],
       );
 
-      console.log(
+      heartbeat_notification && console.log(
         `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
       );
 
