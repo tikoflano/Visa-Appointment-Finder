@@ -221,7 +221,15 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
       `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
     );
 
-    await page.click("input[type='submit']");
+    const form = page.locator("form")
+    await form.waitFor();
+    const formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
+
+    // Continue when it is a multi person appointment
+    if(formMethod.toLowerCase() === "get") {
+      console.log("Multi person appointment detected")
+      await page.click("input[type='submit']");
+    }
 
     const response = await page.waitForResponse(/appointment\/days/);
     const appointments: { date: string }[] = await response.json();
