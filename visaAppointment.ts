@@ -1,4 +1,5 @@
-import { Browser, BrowserContext, chromium } from "playwright";
+import { Browser, BrowserContext } from "playwright";
+import { chromium } from "playwright-extra";
 import dotenv from "dotenv";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
@@ -7,6 +8,9 @@ import sqlite3 from "sqlite3";
 import { Database, open } from "sqlite";
 
 dotenv.config();
+
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+chromium.use(StealthPlugin());
 
 enum Action {
   Notify = "notify",
@@ -129,9 +133,10 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
         [process.env.VISA_PROCESS_ID],
       );
 
-      heartbeat_notification && console.log(
-        `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
-      );
+      heartbeat_notification &&
+        console.log(
+          `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
+        );
 
       if (
         !heartbeat_notification ||
@@ -221,13 +226,15 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
       `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
     );
 
-    const form = page.locator("form")
+    const form = page.locator("form");
     await form.waitFor();
-    const formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
+    const formMethod = await form.evaluate(
+      (form: HTMLFormElement) => form.method,
+    );
 
     // Continue when it is a multi person appointment
-    if(formMethod.toLowerCase() === "get") {
-      console.log("Multi person appointment detected")
+    if (formMethod.toLowerCase() === "get") {
+      console.log("Multi person appointment detected");
       await page.click("input[type='submit']");
     }
 
