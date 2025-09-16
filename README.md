@@ -43,3 +43,8 @@ By default it runs with the `-h` (headless mode) flag when running using Docker.
 You can view the latest log entries with:
 
 `sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"`
+
+## Running multiple instances
+
+The `./run.sh` can accept a **FIRST** argument like `--env env.something` that will be used, otherwise it will use `.env`.
+This way you can schedule multiple instances to be running, each one of them with its own credentials and visa process.
