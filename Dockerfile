@@ -13,4 +13,4 @@ RUN npm run build
 
 RUN npx playwright install --with-deps chromium
 
-ENTRYPOINT ["node", "build/visaAppointment.js", "-h"]
+ENTRYPOINT ["node", "build/index.js", "-h"]

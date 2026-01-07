@@ -22,7 +22,7 @@ To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 - `nvm install` (ignore if you have Node v20 installed)
 - `npm install`
 - `npm run build`
-- `node build/visaAppointment.js`
+- `node build/index.js`
 
 ### Using Docker
 
@@ -35,7 +35,7 @@ To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 
 ### Passing flags
 
-However you execute the script, you can pass extra flags. Eg: `node build/visaAppointment.js --help` or `./run.sh --help`.
+However you execute the script, you can pass extra flags. Eg: `node build/index.js --help` or `./run.sh --help`.
 By default it runs with the `-h` (headless mode) flag when running using Docker.
 
 ## View logs
