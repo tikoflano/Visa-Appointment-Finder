@@ -27,11 +27,15 @@ dotenv.config();
   );
   const browserService = new BrowserService();
 
+  let processCompletedSuccessfully = false;
+  let heartbeatEnabled = false;
+
   try {
     await databaseService.initialize();
 
     const config = parseCliArgs();
     const parsedConfig = validateAndParseDates(config);
+    heartbeatEnabled = parsedConfig.heartbeat;
 
     await browserService.launch(parsedConfig.headless);
     const page = browserService.getPage();
@@ -64,13 +68,10 @@ dotenv.config();
       maxDate,
     );
 
-    if (parsedConfig.heartbeat) {
-      await notificationService.sendHeartbeatNotification();
-    }
-
     // Check if there is a date available
     if (!possibleDates.length) {
       await databaseService.log("No appointment available");
+      processCompletedSuccessfully = true;
       return;
     }
 
@@ -89,6 +90,7 @@ dotenv.config();
 
     if (!parsedConfig.action.length) {
       await databaseService.log("No action taken");
+      processCompletedSuccessfully = true;
       return;
     }
 
@@ -102,6 +104,8 @@ dotenv.config();
         `Rescheduling completed, the new appointment date is ${formatDate(firstDate)}`,
       );
     }
+
+    processCompletedSuccessfully = true;
   } catch (error) {
     let message = "Unknown Error";
 
@@ -111,6 +115,11 @@ dotenv.config();
 
     await databaseService.log(message, true);
   } finally {
+    // Send heartbeat notification if enabled and process completed successfully
+    if (heartbeatEnabled && processCompletedSuccessfully) {
+      await notificationService.sendHeartbeatNotification();
+    }
+
     // Teardown
     await databaseService.close();
     await browserService.close();
