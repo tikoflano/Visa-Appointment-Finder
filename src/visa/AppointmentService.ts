@@ -8,6 +8,12 @@ export class AppointmentService {
     this.page = page;
   }
 
+  private async getFormMethod(): Promise<string> {
+    const form = this.page.locator("form");
+    await form.waitFor();
+    return await form.evaluate((f: HTMLFormElement) => f.method);
+  }
+
   async getCurrentAppointmentDate(): Promise<Date> {
     const getDirectionsLink = this.page.locator(
       `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
@@ -30,13 +36,11 @@ export class AppointmentService {
     );
   }
 
-  async handleMultiPersonCheckboxes(): Promise<void> {
-    let form = this.page.locator("form");
-    await form.waitFor();
-    let formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
+  async handleCheckboxSteps(): Promise<void> {
+    let method = await this.getFormMethod();
 
-    // Continue when it is a multi person appointment
-    while (formMethod.toLowerCase() === "get") {
+    // Continue while the form uses GET (checkbox confirmation steps)
+    while (method.toLowerCase() === "get") {
       console.log("Checkbox step detected");
       const checkboxes = this.page.locator("input[type=checkbox]");
       const checkboxesCount = await checkboxes.count();
@@ -50,9 +54,7 @@ export class AppointmentService {
 
       await this.page.click("input[type='submit']");
 
-      form = this.page.locator("form");
-      await form.waitFor();
-      formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
+      method = await this.getFormMethod();
     }
   }
 
@@ -62,7 +64,7 @@ export class AppointmentService {
       `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
     );
 
-    await this.handleMultiPersonCheckboxes();
+    await this.handleCheckboxSteps();
 
     const response = await this.page.waitForResponse(/appointment\/days/);
     const appointments: { date: string }[] = await response.json();
