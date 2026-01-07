@@ -123,46 +123,6 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
 
     await logInDatabase("Process started");
 
-    if (argv.heartbeat) {
-      if (!process.env.HEARTBEAT_TIME || !process.env.HEARTBEAT_DESTINATION) {
-        throw Error("HEARTBEAT_* environment variable missing");
-      }
-
-      const heartbeat_notification = await db.get(
-        "SELECT * FROM heartbeat_notification WHERE visa_process_id = ? ORDER BY id DESC",
-        [process.env.VISA_PROCESS_ID],
-      );
-
-      heartbeat_notification &&
-        console.log(
-          `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
-        );
-
-      if (
-        !heartbeat_notification ||
-        Math.floor(
-          (+new Date() - +new Date(heartbeat_notification["timestamp"])) /
-            1000 /
-            60,
-        ) > parseInt(process.env.HEARTBEAT_TIME)
-      ) {
-        await sendMail(
-          process.env.HEARTBEAT_DESTINATION,
-          "Visa appointment scheduler is running",
-          "This is just to let you know that the script is currently running",
-        );
-
-        console.log("Heartbeat notifcation sent");
-
-        await db.run(
-          "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
-          [process.env.VISA_PROCESS_ID],
-        );
-      } else {
-        console.log("Heartbeat notifcation skipped");
-      }
-    }
-
     await page.goto("https://ais.usvisa-info.com/en-cl/niv/users/sign_in");
 
     // Fill login form
@@ -226,16 +186,28 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
       `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
     );
 
-    const form = page.locator("form");
+    let form = page.locator("form");
     await form.waitFor();
-    const formMethod = await form.evaluate(
-      (form: HTMLFormElement) => form.method,
-    );
+    let formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
 
     // Continue when it is a multi person appointment
-    if (formMethod.toLowerCase() === "get") {
-      console.log("Multi person appointment detected");
+    while (formMethod.toLowerCase() === "get") {
+      console.log("Checkbox step detected");
+      const checkboxes = page.locator('input[type=checkbox]');
+      const checkboxesCount = await checkboxes.count();
+
+      for (let i = 0; i < checkboxesCount; i++) {
+        if(!await checkboxes.nth(i).isChecked()){
+          const parent = checkboxes.nth(i).locator('xpath=..');
+          await parent.click();
+        }
+      }
+
       await page.click("input[type='submit']");
+
+      form = page.locator("form");
+      await form.waitFor();
+      formMethod = await form.evaluate((form: HTMLFormElement) => form.method);
     }
 
     const response = await page.waitForResponse(/appointment\/days/);
@@ -252,6 +224,10 @@ let db: Database<sqlite3.Database, sqlite3.Statement>;
     if (minDate) {
       console.log(`Searching for appointments after ${minDate}`);
       possibleDates = possibleDates.filter((date) => date >= minDate!);
+    }
+
+    if (argv.heartbeat) {
+      await sendHeartbeatNotification();
     }
 
     // Check if there is a date available
@@ -377,4 +353,45 @@ async function sendMail(to: string, subject: string, html: string) {
     subject,
     html,
   });
+}
+
+
+async function sendHeartbeatNotification() {
+  if (!process.env.HEARTBEAT_TIME || !process.env.HEARTBEAT_DESTINATION) {
+    throw Error("HEARTBEAT_* environment variable missing");
+  }
+
+  const heartbeat_notification = await db.get(
+    "SELECT * FROM heartbeat_notification WHERE visa_process_id = ? ORDER BY id DESC",
+    [process.env.VISA_PROCESS_ID],
+  );
+
+  heartbeat_notification &&
+    console.log(
+      `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
+    );
+
+  if (
+    !heartbeat_notification ||
+    Math.floor(
+      (+new Date() - +new Date(heartbeat_notification["timestamp"])) /
+        1000 /
+        60,
+    ) > parseInt(process.env.HEARTBEAT_TIME)
+  ) {
+    await sendMail(
+      process.env.HEARTBEAT_DESTINATION,
+      "Visa appointment scheduler is running",
+      "This is just to let you know that the script is currently running",
+    );
+
+    console.log("Heartbeat notifcation sent");
+
+    await db.run(
+      "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
+      [process.env.VISA_PROCESS_ID],
+    );
+  } else {
+    console.log("Heartbeat notifcation skipped");
+  }
 }
