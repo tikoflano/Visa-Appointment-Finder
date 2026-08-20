@@ -50,13 +50,21 @@ dotenv.config();
     await databaseService.log("Process started");
 
     const authenticator = new VisaAuthenticator(page);
+    const appointmentService = new AppointmentService(page);
+
     await authenticator.login(user_email, user_password);
 
-    const appointmentService = new AppointmentService(page);
+    await appointmentService.waitForHomePage();
+    await appointmentService.checkIfVisaProcessExists();
 
     let maxDate = parsedConfig.maxDate;
     if (!maxDate) {
       maxDate = await appointmentService.getCurrentAppointmentDate();
+      if (!maxDate) {
+        throw new Error(
+          "No current appointment found and no max date provided",
+        );
+      }
     }
 
     console.log(`Searching for appointments before ${maxDate}`);
@@ -77,7 +85,9 @@ dotenv.config();
 
     const firstDate = possibleDates[0];
 
-    await databaseService.log(`Appointment available on ${formatDate(firstDate)}`);
+    await databaseService.log(
+      `Appointment available on ${formatDate(firstDate)}`,
+    );
 
     let extraDates = "";
     if (possibleDates.length > 1) {
@@ -95,13 +105,18 @@ dotenv.config();
     }
 
     if (parsedConfig.action.includes(Action.Notify)) {
-      await notificationService.sendAppointmentNotification(firstDate, extraDates);
+      await notificationService.sendAppointmentNotification(
+        firstDate,
+        extraDates,
+      );
     }
 
     if (parsedConfig.action.includes(Action.Reschedule)) {
       await appointmentService.reschedule(firstDate);
       await databaseService.log(
-        `Rescheduling completed, the new appointment date is ${formatDate(firstDate)}`,
+        `Rescheduling completed, the new appointment date is ${formatDate(
+          firstDate,
+        )}`,
       );
     }
 
@@ -125,4 +140,3 @@ dotenv.config();
     await browserService.close();
   }
 })();
-

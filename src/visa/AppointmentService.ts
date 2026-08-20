@@ -14,7 +14,26 @@ export class AppointmentService {
     return await form.evaluate((f: HTMLFormElement) => f.method);
   }
 
-  async getCurrentAppointmentDate(): Promise<Date> {
+  async waitForHomePage(): Promise<void> {
+    await this.page.waitForURL(
+      "https://ais.usvisa-info.com/en-cl/niv/groups/*",
+    );
+    console.log("Home page loaded");
+  }
+
+  async checkIfVisaProcessExists(): Promise<void> {
+    const visaProcess = this.page.locator(
+      `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/continue_actions"]`,
+    );
+    try {
+      await visaProcess.waitFor({ state: "visible", timeout: 1000 });
+      console.log("Visa process found");
+    } catch (error) {
+      throw new Error("Visa process not found");
+    }
+  }
+
+  async getCurrentAppointmentDate(): Promise<Date | undefined> {
     const getDirectionsLink = this.page.locator(
       `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
     );
@@ -22,18 +41,21 @@ export class AppointmentService {
       .locator(".consular-appt")
       .filter({ has: getDirectionsLink });
 
-    const consularAppointmentDetails = await consularAppointment.innerText();
+    try {
+      const consularAppointmentDetails = await consularAppointment.innerText({
+        timeout: 1000,
+      });
 
-    if (!consularAppointmentDetails) {
-      throw Error("Current appointment not found");
+      return new Date(
+        consularAppointmentDetails.substring(
+          consularAppointmentDetails.indexOf(":") + 2,
+          consularAppointmentDetails.lastIndexOf(","),
+        ),
+      );
+    } catch (error) {
+      console.log("Current appointment not found");
+      return undefined;
     }
-
-    return new Date(
-      consularAppointmentDetails.substring(
-        consularAppointmentDetails.indexOf(":") + 2,
-        consularAppointmentDetails.lastIndexOf(","),
-      ),
-    );
   }
 
   async handleCheckboxSteps(): Promise<void> {
@@ -76,11 +98,7 @@ export class AppointmentService {
     return appointments.map(({ date }) => new Date(date));
   }
 
-  filterAppointments(
-    dates: Date[],
-    minDate?: Date,
-    maxDate?: Date,
-  ): Date[] {
+  filterAppointments(dates: Date[], minDate?: Date, maxDate?: Date): Date[] {
     let possibleDates = dates;
 
     if (maxDate) {
@@ -120,4 +138,3 @@ export class AppointmentService {
     await this.page.getByText("Confirm").click();
   }
 }
-
