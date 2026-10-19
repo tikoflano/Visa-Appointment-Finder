@@ -9,7 +9,7 @@ import { NotificationService } from "./services/NotificationService";
 import { BrowserService } from "./services/BrowserService";
 import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
-import { formatDate } from "./utils/dateUtils";
+import { addDays, formatDate } from "./utils/dateUtils";
 
 dotenv.config();
 
@@ -57,17 +57,25 @@ dotenv.config();
     await appointmentService.waitForHomePage();
     await appointmentService.checkIfVisaProcessExists();
 
-    let maxDate = parsedConfig.maxDate;
-    if (!maxDate) {
+    // filterAppointments excludes maxDate, so a user-provided max date is
+    // pushed one day forward to make it inclusive.
+    let maxDate: Date | undefined;
+    if (parsedConfig.maxDate) {
+      maxDate = addDays(parsedConfig.maxDate, 1);
+      console.log(
+        `Searching for appointments on or before ${formatDate(
+          parsedConfig.maxDate,
+        )}`,
+      );
+    } else {
       maxDate = await appointmentService.getCurrentAppointmentDate();
       if (!maxDate) {
         throw new Error(
           "No current appointment found and no max date provided",
         );
       }
+      console.log(`Searching for appointments before ${formatDate(maxDate)}`);
     }
-
-    console.log(`Searching for appointments before ${maxDate}`);
 
     const dates = await appointmentService.findAvailableAppointments();
     const possibleDates = appointmentService.filterAppointments(

@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { formatDate } from "../utils/dateUtils";
+import { formatDate, parseDateAsUtc } from "../utils/dateUtils";
 
 export class AppointmentService {
   private page: Page;
@@ -46,7 +46,7 @@ export class AppointmentService {
         timeout: 1000,
       });
 
-      return new Date(
+      return parseDateAsUtc(
         consularAppointmentDetails.substring(
           consularAppointmentDetails.indexOf(":") + 2,
           consularAppointmentDetails.lastIndexOf(","),
@@ -106,7 +106,9 @@ export class AppointmentService {
     }
 
     if (minDate) {
-      console.log(`Searching for appointments after ${minDate}`);
+      console.log(
+        `Searching for appointments on or after ${formatDate(minDate)}`,
+      );
       possibleDates = possibleDates.filter((date) => date >= minDate);
     }
 
@@ -116,7 +118,7 @@ export class AppointmentService {
   async reschedule(date: Date): Promise<void> {
     console.log(`Rescheduling appointment to ${date}`);
 
-    const year = date.getFullYear();
+    const year = date.getUTCFullYear();
     const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
     const day = `${date.getUTCDate()}`.padStart(2, "0");
 

@@ -1,6 +1,7 @@
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
 import { Action, Config, ParsedConfig } from "../types";
+import { parseDateAsUtc } from "../utils/dateUtils";
 
 export function parseCliArgs(): Config {
   return yargs(hideBin(process.argv))
@@ -22,14 +23,14 @@ export function parseCliArgs(): Config {
         type: "string",
         alias: "max-date",
         describe:
-          "If set, the appointment must be before this date. If not set, it will use your current appointment date. Format: MM/DD/YYYY",
+          "If set, the appointment must be on or before this date. If not set, the appointment must be before your current appointment date. Format: MM/DD/YYYY",
         default: "",
       },
       minDate: {
         type: "string",
         alias: "min-date",
         describe:
-          "If set, the appointment must be after or at this date. Format: MM/DD/YYYY",
+          "If set, the appointment must be on or after this date. Format: MM/DD/YYYY",
         default: "",
       },
       heartbeat: {
@@ -48,14 +49,14 @@ export function validateAndParseDates(config: Config): ParsedConfig {
   let minDate: Date | undefined;
 
   if (config.maxDate) {
-    maxDate = new Date(config.maxDate);
+    maxDate = parseDateAsUtc(config.maxDate);
     if (isNaN(+maxDate)) {
       throw Error("Invalid maxDate date provided");
     }
   }
 
   if (config.minDate) {
-    minDate = new Date(config.minDate);
+    minDate = parseDateAsUtc(config.minDate);
     if (isNaN(+minDate)) {
       throw Error("Invalid minDate provided");
     }
