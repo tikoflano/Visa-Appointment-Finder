@@ -4,7 +4,7 @@ This project was created to help getting a Visa appointment in the Chilean consu
 
 ## Getting started
 
-- `cp .env.dist .env`
+- `cp .env_example .env`
 - `nano .env` and set at least the `VISA_*` variables.
 
 To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
@@ -28,15 +28,25 @@ To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 
 - `./run.sh`
 
+The first run builds the `visa` image. After that, `run.sh` reuses the existing image and **never rebuilds it**, so code changes are ignored until you rebuild.
+
 #### Updating using Docker
 
-- `git pull`
+Run this after a `git pull` or any change to the code:
+
 - `docker build -t visa .`
 
 ### Passing flags
 
 However you execute the script, you can pass extra flags. Eg: `node build/index.js --help` or `./run.sh --help`.
 By default it runs with the `-h` (headless mode) flag when running using Docker.
+
+### Date range
+
+- `--minDate=MM/DD/YYYY`: only consider appointments **on or after** this date.
+- `--maxDate=MM/DD/YYYY`: only consider appointments **on or before** this date. If omitted, only appointments **strictly before** your current appointment are considered.
+
+Both dates are inclusive. Eg: `./run.sh --minDate=11/16/2026 --maxDate=11/30/2026` matches appointments from November 16 through November 30.
 
 ## View logs
 
@@ -46,5 +56,5 @@ You can view the latest log entries with:
 
 ## Running multiple instances
 
-The `./run.sh` can accept a **FIRST** argument like `--env env.something` that will be used, otherwise it will use `.env`.
+The `./run.sh` can accept a **FIRST** argument like `--env .env.something` that will be used, otherwise it will use `.env`. Any other flags go after it, eg: `./run.sh --env .env.something --minDate=11/16/2026`.
 This way you can schedule multiple instances to be running, each one of them with its own credentials and visa process.
