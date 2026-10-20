@@ -23,7 +23,6 @@ export interface ProfileInput {
   actions: Action[];
   heartbeat: boolean;
   enabled: boolean;
-  intervalMinutes: number;
 }
 
 export interface Profile extends Omit<ProfileInput, "visaPassword"> {
@@ -37,6 +36,7 @@ export interface Settings {
   gmailUser: string;
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
+  intervalMinutes: number;
   heartbeatMinutes: number;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
@@ -77,6 +77,7 @@ function normalizeEmailList(value: unknown): string {
 const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
+  interval_minutes: "5",
   heartbeat_minutes: "1440",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
@@ -124,7 +125,6 @@ export class Store {
         actions TEXT NOT NULL DEFAULT '',
         heartbeat INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 0,
-        interval_minutes INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -150,6 +150,13 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS profile_process_idx
         ON profile (visa_process_id);
     `);
+
+    const profileColumns: { name: string }[] = await this.db.all(
+      "PRAGMA table_info(profile)",
+    );
+    if (profileColumns.some((column) => column.name === "interval_minutes")) {
+      await this.db.exec("ALTER TABLE profile DROP COLUMN interval_minutes");
+    }
 
     await this.verifyMasterKey();
   }
@@ -199,6 +206,7 @@ export class Store {
       gmailUser: await this.getSetting("gmail_user"),
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
+      intervalMinutes: Number(await this.getSetting("interval_minutes")),
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
@@ -218,6 +226,10 @@ export class Store {
     await this.setRawSetting(
       "email_admin_destination",
       normalizeEmailList(input.emailAdminDestination),
+    );
+    await this.setRawSetting(
+      "interval_minutes",
+      positiveInt(input.intervalMinutes, "Check interval"),
     );
     await this.setRawSetting(
       "heartbeat_minutes",
@@ -288,7 +300,6 @@ export class Store {
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
       heartbeat: !!row.heartbeat,
       enabled: !!row.enabled,
-      intervalMinutes: row.interval_minutes,
       hasPassword: !!row.visa_password_enc,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -304,7 +315,6 @@ export class Store {
     const minDate = input.minDate || null;
     const maxDate = input.maxDate || null;
     const actions = Array.isArray(input.actions) ? input.actions : [];
-    const intervalMinutes = Number(input.intervalMinutes);
 
     if (!name) throw new ValidationError("Name is required");
     if (!visaEmail) throw new ValidationError("Visa account email is required");
@@ -329,9 +339,6 @@ export class Store {
     if (actions.includes(Action.Notify) && !emailDestination) {
       throw new ValidationError("Notify emails are required for notify action");
     }
-    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1) {
-      throw new ValidationError("Interval must be a positive number of minutes");
-    }
 
     return {
       name,
@@ -344,7 +351,6 @@ export class Store {
       actions,
       heartbeat: !!input.heartbeat,
       enabled: !!input.enabled,
-      intervalMinutes,
     };
   }
 
@@ -383,8 +389,8 @@ export class Store {
     try {
       const result = await this.db.run(
         `INSERT INTO profile (name, visa_email, visa_password_enc, visa_process_id, email_destination,
-           min_date, max_date, actions, heartbeat, enabled, interval_minutes, created_at, updated_at)
-         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           min_date, max_date, actions, heartbeat, enabled, created_at, updated_at)
+         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.name,
           input.visaEmail,
@@ -395,7 +401,6 @@ export class Store {
           input.actions.join(","),
           input.heartbeat ? 1 : 0,
           input.enabled ? 1 : 0,
-          input.intervalMinutes,
           now,
           now,
         ],
@@ -428,7 +433,7 @@ export class Store {
     try {
       await this.db.run(
         `UPDATE profile SET name = ?, visa_email = ?, visa_process_id = ?, email_destination = ?,
-           min_date = ?, max_date = ?, actions = ?, heartbeat = ?, enabled = ?, interval_minutes = ?,
+           min_date = ?, max_date = ?, actions = ?, heartbeat = ?, enabled = ?,
            updated_at = ?
          WHERE id = ?`,
         [
@@ -441,7 +446,6 @@ export class Store {
           input.actions.join(","),
           input.heartbeat ? 1 : 0,
           input.enabled ? 1 : 0,
-          input.intervalMinutes,
           new Date().toISOString(),
           id,
         ],

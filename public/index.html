@@ -53,7 +53,6 @@
             <th>Process</th>
             <th>Date window</th>
             <th>Actions</th>
-            <th>Every</th>
             <th>Last run</th>
             <th>Last message</th>
             <th></th>
@@ -87,7 +86,6 @@
             Latest date <input name="maxDate" type="date" />
             <small>Empty means "before the current appointment".</small>
           </label>
-          <label>Check every (minutes) <input name="intervalMinutes" type="number" min="1" required /></label>
         </div>
         <fieldset>
           <legend>When an appointment is found</legend>
@@ -113,19 +111,76 @@
       <form id="settings-form" method="dialog">
         <h2>Settings</h2>
         <div class="grid">
-          <label>Gmail user <input name="gmailUser" type="email" autocomplete="off" /></label>
           <label>
-            Gmail app password
+            <span class="label-text">
+              Gmail user
+              <sl-tooltip placement="bottom">
+                <span slot="content">Gmail account that sends appointment emails and heartbeats.</span>
+                <button type="button" class="help-tip" aria-label="About Gmail user">?</button>
+              </sl-tooltip>
+            </span>
+            <input name="gmailUser" type="email" autocomplete="off" />
+          </label>
+          <label>
+            <span class="label-text">
+              Gmail app password
+              <sl-tooltip placement="bottom">
+                <span slot="content">Google app password for that Gmail account, not the normal login password. Leave blank to keep the stored one.</span>
+                <button type="button" class="help-tip" aria-label="About Gmail app password">?</button>
+              </sl-tooltip>
+            </span>
             <input name="gmailAppPassword" type="password" autocomplete="new-password" />
           </label>
           <label class="wide">
-            Admin notification emails (comma separated)
+            <span class="label-text">
+              Admin notification emails (comma separated)
+              <sl-tooltip placement="bottom">
+                <span slot="content">Receives heartbeat emails and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
+                <button type="button" class="help-tip" aria-label="About admin notification emails">?</button>
+              </sl-tooltip>
+            </span>
             <input name="emailAdminDestination" />
-            <small>Receives heartbeat emails and a BCC of every appointment notification. Profile recipients do not see these addresses.</small>
           </label>
-          <label>Heartbeat every (minutes) <input name="heartbeatMinutes" type="number" min="1" required /></label>
-          <label>Max concurrent runs <input name="maxConcurrentRuns" type="number" min="1" required /></label>
-          <label>Run timeout (minutes) <input name="runTimeoutMinutes" type="number" min="1" required /></label>
+          <label>
+            <span class="label-text">
+              Check every (minutes)
+              <sl-tooltip placement="bottom">
+                <span slot="content">How often every enabled profile is checked. One interval for the whole app, not per profile.</span>
+                <button type="button" class="help-tip" aria-label="About check interval">?</button>
+              </sl-tooltip>
+            </span>
+            <input name="intervalMinutes" type="number" min="1" required />
+          </label>
+          <label>
+            <span class="label-text">
+              Heartbeat every (minutes)
+              <sl-tooltip placement="bottom">
+                <span slot="content">Minimum time between heartbeat emails after a successful check. Heartbeats go to the admin notification addresses.</span>
+                <button type="button" class="help-tip" aria-label="About heartbeat interval">?</button>
+              </sl-tooltip>
+            </span>
+            <input name="heartbeatMinutes" type="number" min="1" required />
+          </label>
+          <label>
+            <span class="label-text">
+              Max concurrent runs
+              <sl-tooltip placement="bottom">
+                <span slot="content">How many visa checks can run at the same time. Extra due profiles wait in a queue.</span>
+                <button type="button" class="help-tip" aria-label="About max concurrent runs">?</button>
+              </sl-tooltip>
+            </span>
+            <input name="maxConcurrentRuns" type="number" min="1" required />
+          </label>
+          <label>
+            <span class="label-text">
+              Run timeout (minutes)
+              <sl-tooltip placement="bottom">
+                <span slot="content">A check that runs longer than this is killed so a stuck browser cannot block the queue.</span>
+                <button type="button" class="help-tip" aria-label="About run timeout">?</button>
+              </sl-tooltip>
+            </span>
+            <input name="runTimeoutMinutes" type="number" min="1" required />
+          </label>
         </div>
         <p class="error" data-error></p>
         <div class="dialog-actions">

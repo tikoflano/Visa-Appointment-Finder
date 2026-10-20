@@ -18,7 +18,7 @@ One long-running process serves a local admin UI, stores every account in SQLite
 1. `./run.sh` starts a **detached** container named `visa-ui`. Closing the terminal does not stop it. Docker restarts it after a reboot unless you `./run.sh stop`.
 2. The management server listens on http://127.0.0.1:3000 (password-protected).
 3. About every 15 seconds the scheduler looks at **enabled** profiles.
-4. When a profile is due (its own interval, default 5 minutes), or you click **Run now**, it starts `node build/index.js` **inside that same container**.
+4. When a profile is due (the global check interval, default 5 minutes), or you click **Run now**, it starts `node build/index.js` **inside that same container**.
 5. That child logs into ais.usvisa-info.com, searches for dates, optionally emails and/or reschedules, writes to the `log` table, then exits.
 6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a queue. A run that exceeds **Run timeout** is killed.
 
@@ -144,11 +144,11 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule, heartbeat, check interval.
-- **Enabled** — when on, that profile is checked on its interval. Leave new profiles off until you have reviewed them.
+- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule, heartbeat.
+- **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them.
 - **Run now / Stop** — start or cancel a check immediately.
 - **Logs** — appointment messages (`log` table) and captured stdout/stderr of each run.
-- **Settings** — Gmail sender, admin notification emails, heartbeat interval, max concurrent runs, run timeout.
+- **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat interval, max concurrent runs, run timeout.
 
 **Notify** emails the profile’s recipients when a matching date exists. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses. A profile can leave notify emails empty to notify only the admin.
 
@@ -171,9 +171,9 @@ Both bounds are inclusive.
 
 ## What is stored in SQLite
 
-**profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, actions (`notify`, `reschedule`), heartbeat flag, enabled flag, interval.
+**profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, actions (`notify`, `reschedule`), heartbeat flag, enabled flag.
 
-**setting** — Gmail user, encrypted Gmail app password, admin notification emails, heartbeat interval, concurrency, run timeout, admin password hash, key-check ciphertext.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, check interval, heartbeat interval, concurrency, run timeout, admin password hash, key-check ciphertext.
 
 **run** — each scheduler/manual execution (status, output, timestamps). Old rows are pruned after 14 days.
 

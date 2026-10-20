@@ -1,5 +1,6 @@
 import "@shoelace-style/shoelace/dist/themes/light.css";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
+import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
 
 const REFRESH_MS = 10000;
@@ -196,7 +197,6 @@ function renderProfiles() {
             : badge("none", "muted"),
           profile.heartbeat ? badge("heartbeat", "muted") : null,
         ),
-        el("td", {}, `${profile.intervalMinutes}m`),
         el(
           "td",
           {},
@@ -273,12 +273,11 @@ function openProfile(profile) {
   $("[data-delete]", profileForm).hidden = !profile;
 
   const values = profile || {
-    intervalMinutes: 5,
     actions: ["notify"],
     heartbeat: true,
     enabled: true,
   };
-  for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate", "intervalMinutes"]) {
+  for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate"]) {
     profileForm[field].value = values[field] ?? "";
   }
   for (const checkbox of profileForm.querySelectorAll("[name=action]")) {
@@ -318,7 +317,6 @@ profileForm.addEventListener("submit", async (event) => {
     emailDestination: form.emailDestination.value,
     minDate: form.minDate.value || null,
     maxDate: form.maxDate.value || null,
-    intervalMinutes: Number(form.intervalMinutes.value),
     actions,
     heartbeat: form.heartbeat.checked,
     enabled: form.enabled.checked,
@@ -362,6 +360,7 @@ $("#open-settings").addEventListener("click", async () => {
   for (const field of [
     "gmailUser",
     "emailAdminDestination",
+    "intervalMinutes",
     "heartbeatMinutes",
     "maxConcurrentRuns",
     "runTimeoutMinutes",
@@ -383,6 +382,7 @@ settingsForm.addEventListener("submit", async (event) => {
       gmailUser: form.gmailUser.value,
       gmailAppPassword: form.gmailAppPassword.value || undefined,
       emailAdminDestination: form.emailAdminDestination.value,
+      intervalMinutes: Number(form.intervalMinutes.value),
       heartbeatMinutes: Number(form.heartbeatMinutes.value),
       maxConcurrentRuns: Number(form.maxConcurrentRuns.value),
       runTimeoutMinutes: Number(form.runTimeoutMinutes.value),

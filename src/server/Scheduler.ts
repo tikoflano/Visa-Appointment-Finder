@@ -88,17 +88,17 @@ export class Scheduler {
         await this.store.pruneRuns();
       }
 
-      const [profiles, latestRuns] = await Promise.all([
+      const [profiles, latestRuns, settings] = await Promise.all([
         this.store.listProfiles(),
         this.store.getLatestRuns(),
+        this.store.getSettings(),
       ]);
+      const intervalMs = settings.intervalMinutes * 60 * 1000;
       for (const profile of profiles) {
         if (!profile.enabled) continue;
         const lastStart = latestRuns.get(profile.id)?.startedAt;
         const due =
-          !lastStart ||
-          Date.now() - +new Date(lastStart) >=
-            profile.intervalMinutes * 60 * 1000;
+          !lastStart || Date.now() - +new Date(lastStart) >= intervalMs;
         if (due) this.enqueue(profile.id, "schedule");
       }
     } catch (error) {
