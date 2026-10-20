@@ -11,6 +11,7 @@
   --bad: #b42318;
   --warn: #a15c07;
   --info: #2457d6;
+  --disabled-row-opacity: 0.55;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
   color: var(--text);
@@ -295,8 +296,12 @@ th {
   background: #fafbfc;
 }
 
-tr.disabled td:not(:first-child):not(:last-child) {
-  opacity: 0.55;
+tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip)) {
+  opacity: var(--disabled-row-opacity);
+}
+
+tr.disabled .date-window-text {
+  opacity: var(--disabled-row-opacity);
 }
 
 table.profiles th.col-enabled,
@@ -404,6 +409,64 @@ legend {
 
 .spacer {
   flex: 1;
+}
+
+.runs-filters {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.runs-filters sl-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.runs-filters sl-select {
+  flex: 0 0 170px;
+  width: 170px;
+}
+
+.runs-filters sl-button {
+  margin-bottom: 2px;
+}
+
+.runs-notified-range {
+  margin: 0 0 12px;
+}
+
+.runs-mix {
+  margin: 0 0 14px;
+}
+
+.runs-mix-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.runs-mix-bar span {
+  min-width: 0;
+}
+
+.runs-mix-ok {
+  background: var(--ok);
+}
+
+.runs-mix-bad {
+  background: var(--bad);
+}
+
+.runs-mix-other {
+  background: #c5c9d3;
+}
+
+.runs-mix-legend {
+  margin: 6px 0 0;
 }
 
 .runs-wrap {

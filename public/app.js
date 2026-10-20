@@ -8,6 +8,8 @@ import "@shoelace-style/shoelace/dist/components/checkbox/checkbox.js";
 import "@shoelace-style/shoelace/dist/components/dialog/dialog.js";
 import "@shoelace-style/shoelace/dist/components/icon-button/icon-button.js";
 import "@shoelace-style/shoelace/dist/components/input/input.js";
+import "@shoelace-style/shoelace/dist/components/option/option.js";
+import "@shoelace-style/shoelace/dist/components/select/select.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
@@ -62,6 +64,19 @@ function formatTimestamp(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
 }
 
+function toDatetimeLocalValue(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
+function last24HoursRange() {
+  const to = new Date();
+  const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+  return { from: toDatetimeLocalValue(from), to: toDatetimeLocalValue(to) };
+}
+
 function relativeTime(iso) {
   if (!iso) return "never";
   const minutes = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -75,24 +90,36 @@ function liveBookedDate(label, stored) {
   const tip = stored
     ? "Uses the appointment currently booked on AIS. This date can change after a check or reschedule."
     : "No booked date stored yet. A successful check will fill this in, and it can change later.";
-  return el(
+  const tipNode = el(
     "sl-tooltip",
-    { placement: "top", hoist: true },
+    { class: "date-live-tip", placement: "top", hoist: true },
     el("span", { slot: "content" }, tip),
     el("span", { class: "date-live", tabindex: "0" }, label),
   );
+  tipNode.setAttribute("hoist", "");
+  return tipNode;
 }
 
 function dateWindow(profile) {
   const stored = !!profile.currentAppointmentDate;
   const booked = stored ? formatDate(profile.currentAppointmentDate) : "booked";
   if (!profile.minDate && !profile.maxDate) {
-    return el("span", {}, "before ", liveBookedDate(booked, stored));
+    return el(
+      "span",
+      { class: "date-window" },
+      el("span", { class: "date-window-text" }, "before "),
+      liveBookedDate(booked, stored),
+    );
   }
   if (profile.maxDate) {
     return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate)}`;
   }
-  return el("span", {}, `${formatDate(profile.minDate) || "…"} – `, liveBookedDate(booked, stored));
+  return el(
+    "span",
+    { class: "date-window" },
+    el("span", { class: "date-window-text" }, `${formatDate(profile.minDate) || "…"} – `),
+    liveBookedDate(booked, stored),
+  );
 }
 
 function badge(text, kind) {
@@ -525,6 +552,7 @@ $("#open-settings").addEventListener("click", async () => {
     "heartbeatMinutes",
     "maxConcurrentRuns",
     "runTimeoutMinutes",
+    "failureAlarmThreshold",
   ]) {
     named(settingsForm, field).value = settings[field] ?? "";
   }
@@ -571,6 +599,7 @@ settingsForm.addEventListener("submit", async (event) => {
       heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
       maxConcurrentRuns: Number(named(form, "maxConcurrentRuns").value),
       runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
+      failureAlarmThreshold: Number(named(form, "failureAlarmThreshold").value),
       botDebug: named(form, "botDebug").checked,
     });
     settingsDialog.hide();
@@ -585,9 +614,40 @@ settingsForm.addEventListener("submit", async (event) => {
 const runsDialog = $("#runs-dialog");
 const datesDialog = $("#dates-dialog");
 const errorDialog = $("#error-dialog");
+const runsFrom = $("#runs-from");
+const runsTo = $("#runs-to");
+const runsNotified = $("#runs-notified");
+const runsOrder = $("#runs-order");
+const runsClearFilter = $("#runs-clear-filter");
 let runsCache = [];
+let runsNotifiedMeta = { count: 0, firstAt: null, lastAt: null };
+let runsProfileId = null;
+let runsLoadGen = 0;
 let expandedRunId = null;
 let expandedRun = null;
+
+function localDateTimeToIso(value, endOfMinute = false) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  if (endOfMinute && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) {
+    date.setSeconds(59, 999);
+  }
+  return date.toISOString();
+}
+
+function runsFilterActive() {
+  return Boolean(
+    runsFrom.value ||
+      runsTo.value ||
+      runsNotified.value !== "any" ||
+      runsOrder.value !== "desc",
+  );
+}
+
+function updateRunsClearButton() {
+  runsClearFilter.disabled = !runsFilterActive();
+}
 
 function openAvailableDates(dates) {
   const items = (dates || []).map((iso) => el("li", {}, formatDate(iso) || iso));
@@ -643,7 +703,6 @@ function resultDetail(run) {
   if (!result) {
     rows.push(["Status", run.status]);
   } else {
-    rows.push(["Outcome", outcomeLabel(result.outcome)]);
     if (result.outcome === "error") rows.push(["Error", result.error || "Unknown error"]);
     rows.push(["Booked appointment", formatDate(result.currentAppointment) || "—"]);
     if (result.dates?.length) {
@@ -661,10 +720,79 @@ function resultDetail(run) {
   return [table, el("pre", { class: "run-debug" }, run.output)];
 }
 
-function renderRunRows() {
+function runMixKind(run) {
+  if (run.result?.outcome === "error") return "bad";
+  if (run.status === "success") return "ok";
+  if (run.status === "failed" || run.status === "timeout" || run.status === "interrupted") {
+    return "bad";
+  }
+  return "other";
+}
+
+function renderNotifiedRange() {
+  const node = $("[data-runs-notified-range]");
+  const { count, firstAt, lastAt } = runsNotifiedMeta;
+  node.hidden = false;
+  if (!count) {
+    node.textContent = runsFrom.value || runsTo.value ? "No notifications in this range" : "Never notified";
+    return;
+  }
+  if (count === 1) {
+    node.textContent = `Notified once · ${formatTimestamp(firstAt)}`;
+    return;
+  }
+  node.textContent = `Notified ${count} times · first ${formatTimestamp(firstAt)} · last ${formatTimestamp(lastAt)}`;
+}
+
+function renderRunsMix() {
+  const root = $("#runs-mix");
+  const okSeg = $("[data-runs-mix-ok]", root);
+  const badSeg = $("[data-runs-mix-bad]", root);
+  const otherSeg = $("[data-runs-mix-other]", root);
+  if (!runsCache.length) {
+    root.hidden = true;
+    return;
+  }
+  let ok = 0;
+  let bad = 0;
+  let other = 0;
+  for (const run of runsCache) {
+    const kind = runMixKind(run);
+    if (kind === "ok") ok += 1;
+    else if (kind === "bad") bad += 1;
+    else other += 1;
+  }
+  const setSeg = (node, count) => {
+    node.hidden = count === 0;
+    node.style.flexGrow = String(count);
+  };
+  setSeg(okSeg, ok);
+  setSeg(badSeg, bad);
+  setSeg(otherSeg, other);
+  const parts = [`${ok} succeeded`, `${bad} errored`];
+  if (other) parts.push(`${other} other`);
+  const summary = parts.join(" · ");
+  $("[data-runs-mix-legend]", root).textContent = summary;
+  $("[data-runs-mix-bar]", root).setAttribute("aria-label", parts.join(", "));
+  root.hidden = false;
+}
+
+function renderRunRows(emptyMessage) {
+  renderNotifiedRange();
+  renderRunsMix();
   const body = $("[data-runs]", runsDialog);
   if (!runsCache.length) {
-    body.replaceChildren(el("tr", {}, el("td", { class: "sub" }, "No runs yet")));
+    body.replaceChildren(
+      el(
+        "tr",
+        {},
+        el(
+          "td",
+          { class: "sub", colspan: "4" },
+          emptyMessage || (runsFilterActive() ? "No runs in this range" : "No runs yet"),
+        ),
+      ),
+    );
     return;
   }
   const nodes = [];
@@ -675,7 +803,12 @@ function renderRunRows() {
         "tr",
         { class: expanded ? "clickable expanded" : "clickable", onclick: () => toggleRun(run) },
         el("td", { class: "mono nowrap" }, formatTimestamp(run.startedAt)),
-        el("td", {}, runStatusBadge(run)),
+        el(
+          "td",
+          {},
+          runStatusBadge(run),
+          run.result?.notified ? badge("notified", "info") : null,
+        ),
         el("td", { class: "sub" }, run.trigger),
         el(
           "td",
@@ -697,13 +830,60 @@ function renderRunRows() {
   body.replaceChildren(...nodes);
 }
 
+async function loadRuns() {
+  if (!runsProfileId) return;
+  const from = localDateTimeToIso(runsFrom.value);
+  const to = localDateTimeToIso(runsTo.value, true);
+  if (from && to && from > to) {
+    runsCache = [];
+    runsNotifiedMeta = { count: 0, firstAt: null, lastAt: null };
+    renderRunRows("From must be before To");
+    return;
+  }
+  const params = new URLSearchParams({
+    limit: runsFilterActive() ? "500" : "100",
+    order: runsOrder.value === "asc" ? "asc" : "desc",
+  });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (runsNotified.value === "yes") params.set("notified", "yes");
+  if (runsNotified.value === "no") params.set("notified", "no");
+  const gen = ++runsLoadGen;
+  try {
+    const data = await api("GET", `/api/profiles/${runsProfileId}/runs?${params}`);
+    if (gen !== runsLoadGen) return;
+    runsCache = data.runs || [];
+    runsNotifiedMeta = data.notified || { count: 0, firstAt: null, lastAt: null };
+    renderRunRows();
+  } catch (error) {
+    if (gen !== runsLoadGen) return;
+    runsCache = [];
+    runsNotifiedMeta = { count: 0, firstAt: null, lastAt: null };
+    renderRunRows(error.message);
+  }
+}
+
+function resetRunsFilters({ keepRange = false } = {}) {
+  if (!keepRange) {
+    runsFrom.value = "";
+    runsTo.value = "";
+  }
+  runsNotified.value = "any";
+  runsOrder.value = "desc";
+  updateRunsClearButton();
+}
+
 async function openRuns(profile) {
   expandedRunId = null;
   expandedRun = null;
+  runsProfileId = profile.id;
+  const range = last24HoursRange();
+  runsFrom.value = range.from;
+  runsTo.value = range.to;
+  resetRunsFilters({ keepRange: true });
   runsDialog.label = `Runs — ${profile.name}`;
   runsDialog.show();
-  runsCache = await api("GET", `/api/profiles/${profile.id}/runs?limit=100`);
-  renderRunRows();
+  await loadRuns();
 }
 
 async function toggleRun(run) {
@@ -717,6 +897,27 @@ async function toggleRun(run) {
   expandedRun = await api("GET", `/api/runs/${run.id}`);
   renderRunRows();
 }
+
+runsFrom.addEventListener("sl-change", () => {
+  updateRunsClearButton();
+  loadRuns();
+});
+runsTo.addEventListener("sl-change", () => {
+  updateRunsClearButton();
+  loadRuns();
+});
+runsNotified.addEventListener("sl-change", () => {
+  updateRunsClearButton();
+  loadRuns();
+});
+runsOrder.addEventListener("sl-change", () => {
+  updateRunsClearButton();
+  loadRuns();
+});
+runsClearFilter.addEventListener("click", () => {
+  resetRunsFilters();
+  loadRuns();
+});
 
 for (const button of document.querySelectorAll("[data-close]")) {
   button.addEventListener("click", () => button.closest("sl-dialog").hide());

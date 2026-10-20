@@ -20,9 +20,15 @@ One long-running process serves a local admin UI, stores every account in SQLite
 3. About every 15 seconds the scheduler looks at **enabled** profiles.
 4. When a profile is due (the global check interval, default 5 minutes), or you click **Run now**, it starts `node build/index.js` **inside that same container**.
 5. That child logs into ais.usvisa-info.com, searches for dates, optionally emails and/or reschedules, prints one `VISA_RESULT` JSON line on stdout, then exits. Step-by-step debug messages are off unless Settings **Capture bot debug output** (or `--debug`) is on. The scheduler parses the JSON and stores it.
-6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a queue. A run that exceeds **Run timeout** is killed.
+6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a FIFO queue, **one slot per profile** (already running or queued profiles are not enqueued again). A run that exceeds **Run timeout** is killed.
+
+A profile is due from the **start** of its last run, not the finish. A check that lasts longer than the interval will not pile up extra queue entries, but the next run starts as soon as it is idle and the interval since that start has elapsed.
+
+If a profile stays **running** or **queued** longer than **Check every**, the UI shows a queue-health warning and turns that profile’s running/queued badge orange.
 
 The child does not read env files. The scheduler decrypts the visa password and Gmail app password, then injects `VISA_*` / `GMAIL_*` / `EMAIL_*` into that process. The master key is not passed to children.
+
+**AIS** is the US visa site the bot logs into: [ais.usvisa-info.com](https://ais.usvisa-info.com) (Chile NIV).
 
 ## Data on disk
 
@@ -111,7 +117,7 @@ Environment variables `run.sh` honors when starting the container:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HOST_BIND` | `127.0.0.1` | Address published on the host (`0.0.0.0` to expose on the LAN) |
-| `PORT` | `3000` | Host port mapped to the container’s 3000 |
+| `PORT` | `3000` | Host port mapped to the container’s 3000. Do not set this to `3456` while `./run.sh dev` is using that port for the API |
 | `COOKIE_SECURE` | unset | Set `true` if you terminate TLS in front of the UI |
 
 Examples:
@@ -145,17 +151,25 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule.
+The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, and icon actions (run/stop, runs, edit).
+
+- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, settings, sign out).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Enable is refused if the date window overlaps another enabled profile (notify included — two people should not hunt the same days). An empty latest date needs a stored booked appointment from a prior run, or set a latest date.
+- **Date window** — if latest is empty, the end of the window is the current booked date (dashed link, tooltip). That date can change after a check or reschedule.
 - **Run now / Stop** — start or cancel a check immediately.
-- **Runs** — each check for that profile. Click a run to expand its structured result (outcome, error, booked date, dates). Click again to collapse. Click **available** on the main table to see matching dates.
-- **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, bot debug output.
+- **Result** — **none available** is a slate chip (checked, nothing matched), distinct from gray **never run**. **available** is clickable and lists matching dates. **error** / **failed** / **timeout** open a dialog with the error text (same details as expanding that run).
+- **Runs** — history for that profile. Opens on the **last 24 hours**. Filter by from/to datetime and **notified**; sort newest or oldest first. A line above the list shows first and last notification in that range. A green/red bar is the mix of succeeded vs errored checks. Click a row to expand booked appointment, dates, notified, rescheduled, and error text (the outcome badge is already on the row). The list is **not paginated**: 100 runs, or 500 when a filter is on (API cap 500). Older rows past that cap are omitted; SQLite still prunes runs after 14 days.
+- **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, failure alarm (default 3 consecutive errors), bot debug output.
 
-**Notify** emails the profile’s recipients when a matching date exists. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses. A profile can leave notify emails empty to notify only the admin.
+**Notify** (orange badge) emails the profile’s recipients when a matching date exists. Those recipients are required if notify is on. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses.
 
-**Reschedule** books the first matching date without asking.
+If sending that appointment email fails, the whole check is stored as **error** (`notified` stays false), even when dates were found. Click the error badge for the SMTP/message. Automatic **heartbeat** and **failure alarm** send failures are only in the container logs; **Send now** for heartbeat shows the error on the Settings form.
 
-**Heartbeat** is a Settings toggle. The scheduler emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes), even if no profile ran or every run failed. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately. `./run.sh dev` turns the scheduler off, so automatic heartbeats do not fire there.
+**Reschedule** (green badge) books the first matching date without asking.
+
+**Heartbeat** is a Settings toggle. The scheduler emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes), even if no profile ran or every run failed. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately. `./run.sh dev` turns the scheduler off, so automatic heartbeats, failure alarms, and scheduled checks do not fire there.
+
+**Failure alarm** emails those same admin addresses when one profile records that many errors in a row (default 3). Timeouts, interruptions, bot errors, and a failed appointment email count; a later successful check resets the streak. The email is sent once per streak, when the count first hits the threshold.
 
 **Bot debug** is off by default. A check only prints `VISA_RESULT` JSON (stdout) plus errors. Turn on **Capture bot debug output** in Settings when you are investigating a failure: the next scheduled or **Run now** checks pass `--debug`, keep step-by-step bot messages (login, home page, Playwright, …) on that run, and show them under the expanded result in **Runs**. Leave it off afterward. For a bot started by hand, `node build/index.js --debug` does the same for that process only.
 
@@ -176,7 +190,7 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 
 **profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, last-seen booked appointment, actions (`notify`, `reschedule`), enabled flag.
 
-**setting** — Gmail user, encrypted Gmail app password, admin notification emails, check interval, heartbeat enabled/interval, concurrency, run timeout, bot debug flag, admin password hash, key-check ciphertext.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, check interval, heartbeat enabled/interval, concurrency, run timeout, failure alarm threshold, bot debug flag, admin password hash, key-check ciphertext.
 
 **run** — each scheduler/manual execution (status, structured `VISA_RESULT` JSON, timestamps, and debug output only if that was on). Old rows are pruned after 14 days.
 

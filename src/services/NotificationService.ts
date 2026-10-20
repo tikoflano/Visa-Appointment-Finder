@@ -86,6 +86,40 @@ export class NotificationService {
     return true;
   }
 
+  async sendFailureAlarm(options: {
+    destination: string;
+    profileName: string;
+    visaEmail: string;
+    visaProcessId: string;
+    threshold: number;
+    errors: { startedAt: string; status: string; error: string | null }[];
+  }): Promise<void> {
+    const latest = options.errors[0];
+    const latestError = latest?.error || latest?.status || "unknown error";
+    const lines = options.errors.length
+      ? options.errors
+          .map(
+            (run) =>
+              `<li>${escapeHtml(run.startedAt)} — ${escapeHtml(run.error || run.status)}</li>`,
+          )
+          .join("")
+      : "<li>No error details</li>";
+
+    await this.emailService.sendMail(
+      options.destination,
+      `Visa check failed ${options.threshold} times in a row: ${options.profileName}`,
+      `<p>The scheduler recorded <strong>${options.threshold}</strong> consecutive errors for <strong>${escapeHtml(
+        options.profileName,
+      )}</strong>.</p>
+        <p>${escapeHtml(options.visaEmail)} · process ${escapeHtml(options.visaProcessId)}</p>
+        <p>Latest error: ${escapeHtml(latestError)}</p>
+        <p><strong>Recent failures</strong></p>
+        <ul>${lines}</ul>
+        <p>Open the management UI to inspect the run and fix the profile.</p>`,
+    );
+    console.log(`Failure alarm sent for ${options.profileName}`);
+  }
+
   async sendAppointmentNotification(
     firstDate: Date,
     extraDates?: string,

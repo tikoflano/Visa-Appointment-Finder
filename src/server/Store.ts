@@ -48,6 +48,7 @@ export interface Settings {
   lastHeartbeatAt: string | null;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
+  failureAlarmThreshold: number;
   botDebug: boolean;
 }
 
@@ -76,6 +77,12 @@ export interface Run {
   output?: string;
 }
 
+export function isFailureRun(run: Pick<Run, "status" | "result">): boolean {
+  if (run.status === "cancelled" || run.status === "running") return false;
+  if (run.result?.outcome === "error") return true;
+  return run.status === "failed" || run.status === "timeout" || run.status === "interrupted";
+}
+
 function normalizeEmailList(value: unknown): string {
   return String(value ?? "")
     .split(",")
@@ -92,6 +99,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   heartbeat_minutes: "1440",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
+  failure_alarm_threshold: "3",
   bot_debug: "0",
 };
 
@@ -253,6 +261,7 @@ export class Store {
       lastHeartbeatAt: await this.getLastHeartbeatAt(),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
+      failureAlarmThreshold: Number(await this.getSetting("failure_alarm_threshold")),
       botDebug: (await this.getSetting("bot_debug")) === "1",
     };
   }
@@ -290,6 +299,10 @@ export class Store {
     await this.setRawSetting(
       "run_timeout_minutes",
       positiveInt(input.runTimeoutMinutes, "Run timeout"),
+    );
+    await this.setRawSetting(
+      "failure_alarm_threshold",
+      positiveInt(input.failureAlarmThreshold, "Failure alarm"),
     );
     await this.setRawSetting("bot_debug", input.botDebug ? "1" : "0");
     if (input.gmailAppPassword) {
@@ -651,12 +664,82 @@ export class Store {
     return new Map(rows.map((row) => [row.profile_id, this.toRun(row)]));
   }
 
-  async listRuns(profileId: number, limit: number): Promise<Run[]> {
+  async listRuns(
+    profileId: number,
+    limit: number,
+    range: {
+      from?: string;
+      to?: string;
+      notified?: boolean;
+      order?: "asc" | "desc";
+    } = {},
+  ): Promise<Run[]> {
+    const clauses = ["profile_id = ?"];
+    const params: unknown[] = [profileId];
+    if (range.from) {
+      clauses.push("started_at >= ?");
+      params.push(range.from);
+    }
+    if (range.to) {
+      clauses.push("started_at <= ?");
+      params.push(range.to);
+    }
+    if (range.notified === true) {
+      clauses.push("json_extract(result, '$.notified') = 1");
+    } else if (range.notified === false) {
+      clauses.push("(result IS NULL OR json_extract(result, '$.notified') IS NOT 1)");
+    }
+    params.push(limit);
     const rows = await this.db.all(
-      "SELECT * FROM run WHERE profile_id = ? ORDER BY id DESC LIMIT ?",
-      [profileId, limit],
+      `SELECT * FROM run WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+      params,
     );
-    return rows.map((row) => this.toRun(row));
+    const runs = rows.map((row) => this.toRun(row));
+    return range.order === "asc" ? runs.reverse() : runs;
+  }
+
+  async getNotifiedRange(
+    profileId: number,
+    range: { from?: string; to?: string } = {},
+  ): Promise<{ count: number; firstAt: string | null; lastAt: string | null }> {
+    const clauses = ["profile_id = ?", "json_extract(result, '$.notified') = 1"];
+    const params: unknown[] = [profileId];
+    if (range.from) {
+      clauses.push("started_at >= ?");
+      params.push(range.from);
+    }
+    if (range.to) {
+      clauses.push("started_at <= ?");
+      params.push(range.to);
+    }
+    const row = await this.db.get<{
+      count: number;
+      firstAt: string | null;
+      lastAt: string | null;
+    }>(
+      `SELECT COUNT(*) AS count, MIN(started_at) AS firstAt, MAX(started_at) AS lastAt
+       FROM run WHERE ${clauses.join(" AND ")}`,
+      params,
+    );
+    return {
+      count: Number(row?.count ?? 0),
+      firstAt: row?.firstAt ?? null,
+      lastAt: row?.lastAt ?? null,
+    };
+  }
+
+  async countConsecutiveFailures(profileId: number): Promise<{
+    count: number;
+    errors: Run[];
+  }> {
+    const runs = await this.listRuns(profileId, 50);
+    const errors: Run[] = [];
+    for (const run of runs) {
+      if (run.status === "cancelled" || run.status === "running") continue;
+      if (!isFailureRun(run)) break;
+      errors.push(run);
+    }
+    return { count: errors.length, errors };
   }
 
   async getRun(runId: number): Promise<Run | undefined> {

@@ -1,6 +1,7 @@
 import { ChildProcess, spawn } from "child_process";
 import path from "path";
 import { parseVisaResult } from "../botResult";
+import { maybeSendFailureAlarm } from "./failureAlarm";
 import { sendHeartbeat } from "./heartbeat";
 import { Profile, RunStatus, Store } from "./Store";
 
@@ -171,6 +172,7 @@ export class Scheduler {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.finishRun(runId, "failed", null, `${message}\n`);
+      this.queueFailureAlarm(profileId, "failed", null);
       return;
     }
 
@@ -227,6 +229,7 @@ export class Scheduler {
             parsed.currentAppointment,
           );
         }
+        this.queueFailureAlarm(profileId, status, parsed);
       } catch (error) {
         console.error(`Failed to record run ${runId}:`, error);
       }
@@ -266,6 +269,18 @@ export class Scheduler {
     if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
     if (debug) args.push("--debug");
     return args;
+  }
+
+  private queueFailureAlarm(
+    profileId: number,
+    status: RunStatus,
+    result: ReturnType<typeof parseVisaResult>,
+  ): void {
+    void maybeSendFailureAlarm(this.store, profileId, status, result).catch(
+      (error) => {
+        console.error(`Failure alarm failed for profile ${profileId}:`, error);
+      },
+    );
   }
 
   private signal(child: ChildProcess, signal: NodeJS.Signals): void {

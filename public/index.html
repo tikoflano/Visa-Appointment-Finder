@@ -132,7 +132,7 @@
             <span slot="label" class="label-text">
               Notify emails (comma separated)
               <sl-tooltip placement="bottom">
-                <span slot="content">Recipients for appointment found emails. Leave empty to notify only the admin addresses.</span>
+                <span slot="content">Recipients for appointment found emails. Required when Send email notification is on. Admin addresses still get a BCC and do not appear to these recipients.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About notify emails"></sl-icon-button>
               </sl-tooltip>
             </span>
@@ -203,7 +203,7 @@
             <span slot="label" class="label-text">
               Admin notification emails (comma separated)
               <sl-tooltip placement="bottom">
-                <span slot="content">Receives heartbeat emails and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
+                <span slot="content">Receives heartbeat emails, consecutive-failure alarms, and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About admin notification emails"></sl-icon-button>
               </sl-tooltip>
             </span>
@@ -255,6 +255,15 @@
               </sl-tooltip>
             </span>
           </sl-input>
+          <sl-input name="failureAlarmThreshold" type="number" min="1" required>
+            <span slot="label" class="label-text">
+              Failure alarm after (errors)
+              <sl-tooltip placement="bottom">
+                <span slot="content">Email the admin addresses when one profile fails this many checks in a row. A later successful check resets the count. Default 3.</span>
+                <sl-icon-button class="help-tip" name="question-circle" label="About failure alarm"></sl-icon-button>
+              </sl-tooltip>
+            </span>
+          </sl-input>
           <div class="check-row wide">
             <sl-checkbox name="botDebug">Capture bot debug output</sl-checkbox>
             <sl-tooltip placement="bottom">
@@ -273,6 +282,31 @@
     </sl-dialog>
 
     <sl-dialog id="runs-dialog" class="wide-dialog" label="Runs">
+      <div class="runs-filters">
+        <sl-input id="runs-from" type="datetime-local" label="From" size="small"></sl-input>
+        <sl-input id="runs-to" type="datetime-local" label="To" size="small"></sl-input>
+      </div>
+      <div class="runs-filters">
+        <sl-select id="runs-notified" label="Notified" size="small" value="any" hoist>
+          <sl-option value="any">Any</sl-option>
+          <sl-option value="yes">Yes</sl-option>
+          <sl-option value="no">No</sl-option>
+        </sl-select>
+        <sl-select id="runs-order" label="Sort" size="small" value="desc" hoist>
+          <sl-option value="desc">Newest first</sl-option>
+          <sl-option value="asc">Oldest first</sl-option>
+        </sl-select>
+        <sl-button id="runs-clear-filter" size="small" disabled>Clear</sl-button>
+      </div>
+      <p class="runs-notified-range sub" data-runs-notified-range hidden></p>
+      <div id="runs-mix" class="runs-mix" hidden>
+        <div class="runs-mix-bar" data-runs-mix-bar role="img">
+          <span class="runs-mix-ok" data-runs-mix-ok hidden></span>
+          <span class="runs-mix-bad" data-runs-mix-bad hidden></span>
+          <span class="runs-mix-other" data-runs-mix-other hidden></span>
+        </div>
+        <p class="runs-mix-legend sub" data-runs-mix-legend></p>
+      </div>
       <div class="runs-wrap">
         <table class="logs"><tbody data-runs></tbody></table>
       </div>

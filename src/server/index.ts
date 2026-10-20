@@ -110,6 +110,29 @@ function sessionCookie(token: string, maxAgeSeconds: number): string {
   }`;
 }
 
+function parseIsoQuery(value: string | null, name: string): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) throw new HttpError(400, `Invalid ${name}`);
+  return date.toISOString();
+}
+
+function parseNotifiedQuery(value: string | null): boolean | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === "1" || raw === "true" || raw === "yes") return true;
+  if (raw === "0" || raw === "false" || raw === "no") return false;
+  throw new HttpError(400, "Invalid notified");
+}
+
+function parseOrderQuery(value: string | null): "asc" | "desc" {
+  const raw = value?.trim().toLowerCase();
+  if (!raw || raw === "desc") return "desc";
+  if (raw === "asc") return "asc";
+  throw new HttpError(400, "Invalid order");
+}
+
 function getCookie(req: http.IncomingMessage, name: string) {
   for (const part of (req.headers.cookie || "").split(";")) {
     const [key, ...rest] = part.trim().split("=");
@@ -325,9 +348,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "GET",
       pattern: /^\/api\/profiles\/(\d+)\/runs$/,
       handler: async ({ params, url }) => {
-        await requireProfile(profileId(params));
+        const id = profileId(params);
+        await requireProfile(id);
         const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 500);
-        return store.listRuns(profileId(params), limit);
+        const from = parseIsoQuery(url.searchParams.get("from"), "from");
+        const to = parseIsoQuery(url.searchParams.get("to"), "to");
+        if (from && to && from > to) throw new HttpError(400, "From must be before To");
+        const notified = parseNotifiedQuery(url.searchParams.get("notified"));
+        const order = parseOrderQuery(url.searchParams.get("order"));
+        const [runs, notifiedRange] = await Promise.all([
+          store.listRuns(id, limit, { from, to, notified, order }),
+          store.getNotifiedRange(id, { from, to }),
+        ]);
+        return { runs, notified: notifiedRange };
       },
     },
     {
