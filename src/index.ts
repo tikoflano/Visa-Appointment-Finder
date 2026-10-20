@@ -1,6 +1,3 @@
-import dotenv from "dotenv";
-import sqlite3 from "sqlite3";
-import { Database, open } from "sqlite";
 import { parseCliArgs, validateAndParseDates } from "./config/cli";
 import { Action } from "./types";
 import { DatabaseService } from "./services/DatabaseService";
@@ -10,17 +7,10 @@ import { BrowserService } from "./services/BrowserService";
 import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
 import { addDays, formatDate } from "./utils/dateUtils";
-
-// dotenv never overwrites already set variables, so loading the instance file
-// first lets it override the shared one.
-dotenv.config();
-dotenv.config({ path: ".env.shared" });
+import { openDatabase } from "./server/Store";
 
 (async () => {
-  const db = await open({
-    filename: "./db.sqlite",
-    driver: sqlite3.Database,
-  });
+  const db = await openDatabase();
 
   const emailService = new EmailService();
   const databaseService = new DatabaseService(db);
@@ -140,6 +130,7 @@ dotenv.config({ path: ".env.shared" });
     }
 
     await databaseService.log(message, true);
+    process.exitCode = 1;
   } finally {
     // Send heartbeat notification if enabled and process completed successfully
     if (heartbeatEnabled && processCompletedSuccessfully) {

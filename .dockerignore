@@ -1,5 +1,9 @@
-Dockerfile
-build/
-node_modules/
-README.md
-.*
+node_modules
+.git
+.gitignore
+db.sqlite
+db.sqlite-*
+secrets
+.env
+.env.*
+build

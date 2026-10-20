@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Visa Appointment Finder</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login-view" hidden>
+      <form id="login-form" class="card login">
+        <h1>Visa Appointment Finder</h1>
+        <p id="setup-hint" class="hint" hidden>
+          Choose an admin password (at least 10 characters) to protect this UI.
+        </p>
+        <label>
+          Admin password
+          <input type="password" name="password" autocomplete="current-password" required autofocus />
+        </label>
+        <label id="confirm-row" hidden>
+          Confirm password
+          <input type="password" name="confirm" autocomplete="new-password" />
+        </label>
+        <p class="error" data-error></p>
+        <button type="submit" class="primary" id="login-submit">Sign in</button>
+      </form>
+    </section>
+
+    <section id="app-view" hidden>
+      <header>
+        <h1>Visa Appointment Finder</h1>
+        <div class="toolbar">
+          <button id="new-profile" class="primary">New profile</button>
+          <button id="open-settings">Settings</button>
+          <button id="logout">Sign out</button>
+        </div>
+      </header>
+
+      <p id="settings-warning" class="banner" hidden>
+        Gmail credentials are not configured, so notifications and heartbeats can't be sent.
+        Open <strong>Settings</strong> to add them.
+      </p>
+
+      <div class="table-wrap">
+      <table class="profiles">
+        <thead>
+          <tr>
+            <th>Enabled</th>
+            <th>Name</th>
+            <th>Process</th>
+            <th>Date window</th>
+            <th>Actions</th>
+            <th>Every</th>
+            <th>Last run</th>
+            <th>Last message</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="profile-rows"></tbody>
+      </table>
+      </div>
+      <p id="empty-state" class="hint" hidden>
+        No profiles yet. Click <strong>New profile</strong> to add one.
+      </p>
+    </section>
+
+    <dialog id="profile-dialog">
+      <form id="profile-form" method="dialog">
+        <h2 data-title>Profile</h2>
+        <div class="grid">
+          <label>Name <input name="name" required /></label>
+          <label>Visa process ID <input name="visaProcessId" inputmode="numeric" required /></label>
+          <label>Visa account email <input name="visaEmail" type="email" autocomplete="off" required /></label>
+          <label>
+            Visa account password
+            <input name="visaPassword" type="password" autocomplete="new-password" />
+          </label>
+          <label class="wide">
+            Notify emails (comma separated)
+            <input name="emailDestination" />
+          </label>
+          <label>Earliest date <input name="minDate" type="date" /></label>
+          <label>
+            Latest date <input name="maxDate" type="date" />
+            <small>Empty means "before the current appointment".</small>
+          </label>
+          <label>Check every (minutes) <input name="intervalMinutes" type="number" min="1" required /></label>
+        </div>
+        <fieldset>
+          <legend>When an appointment is found</legend>
+          <label class="inline"><input type="checkbox" name="action" value="notify" /> Send email notification</label>
+          <label class="inline">
+            <input type="checkbox" name="action" value="reschedule" /> Reschedule automatically
+            <small class="warn">Books the first matching date without asking.</small>
+          </label>
+        </fieldset>
+        <label class="inline"><input type="checkbox" name="heartbeat" /> Send heartbeat emails</label>
+        <label class="inline"><input type="checkbox" name="enabled" /> Enabled (run on schedule)</label>
+        <p class="error" data-error></p>
+        <div class="dialog-actions">
+          <button type="button" class="danger" data-delete>Delete</button>
+          <span class="spacer"></span>
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form" method="dialog">
+        <h2>Settings</h2>
+        <div class="grid">
+          <label>Gmail user <input name="gmailUser" type="email" autocomplete="off" /></label>
+          <label>
+            Gmail app password
+            <input name="gmailAppPassword" type="password" autocomplete="new-password" />
+          </label>
+          <label class="wide">
+            Admin notification BCC
+            <input name="emailAdminDestination" />
+            <small>Receives a copy of every appointment email. Profile recipients do not see this address.</small>
+          </label>
+          <label class="wide">
+            Heartbeat recipients (comma separated)
+            <input name="heartbeatDestination" />
+          </label>
+          <label>Heartbeat every (minutes) <input name="heartbeatMinutes" type="number" min="1" required /></label>
+          <label>Max concurrent runs <input name="maxConcurrentRuns" type="number" min="1" required /></label>
+          <label>Run timeout (minutes) <input name="runTimeoutMinutes" type="number" min="1" required /></label>
+        </div>
+        <p class="error" data-error></p>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="logs-dialog" class="wide-dialog">
+      <h2 data-title>Logs</h2>
+      <div class="tabs">
+        <button type="button" data-tab="messages" class="active">Messages</button>
+        <button type="button" data-tab="runs">Runs</button>
+      </div>
+      <div data-panel="messages">
+        <table class="logs"><tbody data-messages></tbody></table>
+      </div>
+      <div data-panel="runs" hidden>
+        <table class="logs"><tbody data-runs></tbody></table>
+        <pre data-output hidden></pre>
+      </div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" data-close>Close</button>
+      </div>
+    </dialog>
+  </body>
+</html>

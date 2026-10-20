@@ -1,0 +1,234 @@
+import { ChildProcess, spawn } from "child_process";
+import path from "path";
+import { Profile, RunStatus, Store } from "./Store";
+
+const TICK_MS = 15 * 1000;
+const PRUNE_EVERY_MS = 60 * 60 * 1000;
+const KILL_GRACE_MS = 10 * 1000;
+const OUTPUT_BUFFER_LIMIT = 256 * 1024;
+
+// Only these variables are inherited by runner processes. In particular the
+// master key path and anything else in the server environment is not.
+const INHERITED_ENV = ["PATH", "HOME", "TZ", "LANG", "PLAYWRIGHT_BROWSERS_PATH"];
+
+const RUNNER_PATH = path.resolve(__dirname, "..", "index.js");
+
+interface ActiveRun {
+  runId: number;
+  child: ChildProcess;
+  cancelled: boolean;
+}
+
+export type ProfileState = "running" | "queued" | "idle";
+
+export class Scheduler {
+  private readonly store: Store;
+  private readonly active = new Map<number, ActiveRun>();
+  private queue: { profileId: number; trigger: string }[] = [];
+  private draining: Promise<void> = Promise.resolve();
+  private timer: NodeJS.Timeout | undefined;
+  private lastPrune = 0;
+
+  constructor(store: Store) {
+    this.store = store;
+  }
+
+  async start(): Promise<void> {
+    await this.store.markStaleRunsInterrupted();
+    this.timer = setInterval(() => this.tick(), TICK_MS);
+    this.tick();
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+    this.queue = [];
+    const finished = [...this.active.values()].map(
+      (run) => new Promise((resolve) => run.child.once("close", resolve)),
+    );
+    for (const run of this.active.values()) {
+      run.cancelled = true;
+      this.signal(run.child, "SIGTERM");
+    }
+    await Promise.race([
+      Promise.all(finished),
+      new Promise((resolve) => setTimeout(resolve, KILL_GRACE_MS)),
+    ]);
+  }
+
+  getState(profileId: number): ProfileState {
+    if (this.active.has(profileId)) return "running";
+    if (this.queue.some((item) => item.profileId === profileId)) return "queued";
+    return "idle";
+  }
+
+  /** Returns false when the profile is already running or queued. */
+  enqueue(profileId: number, trigger: string): boolean {
+    if (this.getState(profileId) !== "idle") return false;
+    this.queue.push({ profileId, trigger });
+    this.drain();
+    return true;
+  }
+
+  cancel(profileId: number): boolean {
+    const queuedBefore = this.queue.length;
+    this.queue = this.queue.filter((item) => item.profileId !== profileId);
+    const run = this.active.get(profileId);
+    if (run) {
+      run.cancelled = true;
+      this.signal(run.child, "SIGTERM");
+      return true;
+    }
+    return this.queue.length !== queuedBefore;
+  }
+
+  private async tick(): Promise<void> {
+    try {
+      if (Date.now() - this.lastPrune > PRUNE_EVERY_MS) {
+        this.lastPrune = Date.now();
+        await this.store.pruneRuns();
+      }
+
+      const [profiles, latestRuns] = await Promise.all([
+        this.store.listProfiles(),
+        this.store.getLatestRuns(),
+      ]);
+      for (const profile of profiles) {
+        if (!profile.enabled) continue;
+        const lastStart = latestRuns.get(profile.id)?.startedAt;
+        const due =
+          !lastStart ||
+          Date.now() - +new Date(lastStart) >=
+            profile.intervalMinutes * 60 * 1000;
+        if (due) this.enqueue(profile.id, "schedule");
+      }
+    } catch (error) {
+      console.error("Scheduler tick failed:", error);
+    }
+  }
+
+  // Serialized so concurrent callers can't exceed the concurrency limit while
+  // a launch is awaiting the database.
+  private drain(): void {
+    this.draining = this.draining.then(async () => {
+      try {
+        const { maxConcurrentRuns } = await this.store.getSettings();
+        while (this.queue.length && this.active.size < maxConcurrentRuns) {
+          const item = this.queue.shift()!;
+          await this.launch(item.profileId, item.trigger);
+        }
+      } catch (error) {
+        console.error("Failed to start queued runs:", error);
+      }
+    });
+  }
+
+  private async launch(profileId: number, trigger: string): Promise<void> {
+    const profile = await this.store.getProfile(profileId);
+    if (!profile) return;
+
+    const runId = await this.store.createRun(profileId, trigger);
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = await this.buildEnv(profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.store.finishRun(runId, "failed", null, `${message}\n`);
+      return;
+    }
+
+    const { runTimeoutMinutes } = await this.store.getSettings();
+    const child = spawn(process.execPath, this.buildArgs(profile, env), {
+      env,
+      cwd: path.resolve(__dirname, "..", ".."),
+      stdio: ["ignore", "pipe", "pipe"],
+      // Own process group, so cancelling also kills the Chromium children.
+      detached: true,
+    });
+
+    const run: ActiveRun = { runId, child, cancelled: false };
+    this.active.set(profileId, run);
+
+    let output = "";
+    const append = (chunk: Buffer) => {
+      output = (output + chunk.toString("utf8")).slice(-OUTPUT_BUFFER_LIMIT);
+    };
+    child.stdout!.on("data", append);
+    child.stderr!.on("data", append);
+
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      this.signal(child, "SIGTERM");
+      setTimeout(() => this.signal(child, "SIGKILL"), KILL_GRACE_MS).unref();
+    }, runTimeoutMinutes * 60 * 1000);
+
+    let finished = false;
+    const finish = async (exitCode: number | null, extra = "") => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      this.active.delete(profileId);
+
+      let status: RunStatus = exitCode === 0 ? "success" : "failed";
+      if (run.cancelled) status = "cancelled";
+      else if (timedOut) status = "timeout";
+
+      try {
+        await this.store.finishRun(runId, status, exitCode, output + extra);
+      } catch (error) {
+        console.error(`Failed to record run ${runId}:`, error);
+      }
+      this.drain();
+    };
+
+    child.on("error", (error) => finish(null, `\n${error.message}\n`));
+    child.on("close", (code) => finish(code));
+  }
+
+  private async buildEnv(profile: Profile): Promise<NodeJS.ProcessEnv> {
+    const settings = await this.store.getSettings();
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of INHERITED_ENV) {
+      if (process.env[key] !== undefined) env[key] = process.env[key];
+    }
+
+    return {
+      ...env,
+      DB_PATH: path.resolve(process.env.DB_PATH || "./db.sqlite"),
+      VISA_USER_EMAIL: profile.visaEmail,
+      VISA_USER_PASSWORD: await this.store.getVisaPassword(profile.id),
+      VISA_PROCESS_ID: profile.visaProcessId,
+      EMAIL_DESTINATION: profile.emailDestination,
+      EMAIL_ADMIN_DESTINATION: settings.emailAdminDestination,
+      GMAIL_APP_USER: settings.gmailUser,
+      GMAIL_APP_PASSWORD: await this.store.getGmailAppPassword(),
+      HEARTBEAT_TIME: String(settings.heartbeatMinutes),
+      HEARTBEAT_DESTINATION: settings.heartbeatDestination,
+    };
+  }
+
+  private buildArgs(profile: Profile, env: NodeJS.ProcessEnv): string[] {
+    const args = [RUNNER_PATH, "--headless"];
+    for (const action of profile.actions) {
+      args.push(`--action=${action}`);
+    }
+    // The runner accepts YYYY-MM-DD as well as MM/DD/YYYY.
+    if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
+    if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
+    // The runner throws when heartbeat is requested without a destination,
+    // which would turn every successful run into a failure.
+    if (profile.heartbeat && env.HEARTBEAT_DESTINATION && env.GMAIL_APP_USER) {
+      args.push("--heartbeat");
+    }
+    return args;
+  }
+
+  private signal(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (child.pid === undefined || child.exitCode !== null) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  }
+}

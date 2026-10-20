@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "start": "tsc --watch"
+    "watch": "tsc --watch",
+    "start": "node build/server/index.js",
+    "cli": "node build/server/cli.js"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +20,6 @@
     "typescript": "^5.1.6"
   },
   "dependencies": {
-    "dotenv": "^16.0.1",
     "nodemailer": "^6.9.4",
     "playwright": "^1.47.0",
     "playwright-extra": "^4.3.6",
