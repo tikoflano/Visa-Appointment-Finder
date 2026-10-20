@@ -203,7 +203,7 @@ export class Scheduler {
       GMAIL_APP_USER: settings.gmailUser,
       GMAIL_APP_PASSWORD: await this.store.getGmailAppPassword(),
       HEARTBEAT_TIME: String(settings.heartbeatMinutes),
-      HEARTBEAT_DESTINATION: settings.heartbeatDestination,
+      HEARTBEAT_DESTINATION: settings.emailAdminDestination,
     };
   }
 

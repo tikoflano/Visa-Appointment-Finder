@@ -13,9 +13,38 @@ HOST_BIND="${HOST_BIND:-127.0.0.1}"
 HASH_LABEL=visa.source_hash
 IMAGE_REBUILT=0
 
+usage() {
+  cat <<'EOF'
+Usage: ./run.sh [options]
+       ./run.sh <command>
+
+Start (default):
+  ./run.sh                 Start visa-ui detached (rebuild if source changed)
+  --rebuild                Force-rebuild the image
+  --foreground             Run attached to this terminal
+  --restart                Recreate the container even if it is already running
+
+Commands:
+  restart                  Same as --restart
+  stop                     Stop and remove visa-ui
+  logs                     Follow container logs
+  dump                     Print decrypted settings and profiles (host Node)
+  set-password             Set the admin UI password (host Node)
+  generate-key             Show/create secrets/master.key
+  -h, --help               Show this help
+
+./run.sh --env is gone. The old per-account cron workflow is not supported.
+EOF
+}
+
 if [ "${1:-}" = "--env" ]; then
   echo "./run.sh --env is gone. Start the UI with ./run.sh"
   exit 1
+fi
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
 fi
 
 ensure_key() {
@@ -129,14 +158,23 @@ fi
 
 foreground=0
 rebuild_flag=""
-if [ "${1:-}" = "--rebuild" ]; then
-  rebuild_flag=--rebuild
-  shift
-fi
-if [ "${1:-}" = "--foreground" ]; then
-  foreground=1
-  shift
-fi
+do_restart=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rebuild) rebuild_flag=--rebuild; shift ;;
+    --foreground) foreground=1; shift ;;
+    --restart | restart) do_restart=1; shift ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 ensure_image "$rebuild_flag"
 
@@ -146,17 +184,21 @@ if [ "$foreground" = 1 ]; then
     docker rm -f "$CONTAINER_NAME" >/dev/null
   fi
   print_status
-  exec docker run --rm --name "$CONTAINER_NAME" "${docker_base[@]}" "$IMAGE" "$@"
+  exec docker run --rm --name "$CONTAINER_NAME" "${docker_base[@]}" "$IMAGE"
 fi
 
-if container_running && [ "$IMAGE_REBUILT" = 0 ]; then
+if container_running && [ "$IMAGE_REBUILT" = 0 ] && [ "$do_restart" = 0 ]; then
   echo "$CONTAINER_NAME is already running"
   print_status
   exit 0
 fi
 
 if container_running; then
-  echo "Replacing $CONTAINER_NAME with the new image"
+  if [ "$IMAGE_REBUILT" = 1 ]; then
+    echo "Replacing $CONTAINER_NAME with the new image"
+  else
+    echo "Restarting $CONTAINER_NAME"
+  fi
   docker rm -f "$CONTAINER_NAME" >/dev/null
 fi
 

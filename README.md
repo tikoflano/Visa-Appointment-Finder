@@ -85,19 +85,21 @@ Then open http://127.0.0.1:3000.
 
 ## `run.sh` commands
 
-The container is named `visa-ui`. Detached mode uses Docker `--restart unless-stopped`, so it comes back after a reboot until you stop it.
+The container is named `visa-ui`. Detached mode sets Docker’s restart policy to `unless-stopped`, so the container comes back after a reboot until you `./run.sh stop`. That policy is not a `run.sh` flag; use `./run.sh restart` to recreate a running container now.
 
 | Command | What it does |
 | --- | --- |
 | `./run.sh` | Start `visa-ui` in the background. Rebuilds the image if source changed. If the container is already running and the image did not change, prints the URL and exits. |
+| `./run.sh restart` | Recreate `visa-ui` even if it is already running. Rebuilds the image only if source changed. `--restart` is the same. |
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
-| `./run.sh --rebuild --foreground` | Force-rebuild, then run attached (flag order matters: `--rebuild` first). |
+| `./run.sh --rebuild --foreground` | Force-rebuild, then run attached. Flag order does not matter. |
 | `./run.sh logs` | Follow `visa-ui` logs (`docker logs -f`). Ctrl+C only leaves the log stream; the container keeps running. |
 | `./run.sh stop` | Stop and remove `visa-ui`. Scheduled checks stop too. |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
 | `./run.sh set-password` | Prompt for a new admin UI password. Same host Node path as `dump`. |
 | `./run.sh generate-key` | Print the path of `secrets/master.key`. Creates the file if it does not exist. |
+| `./run.sh --help` | Print the same command list. |
 
 `./run.sh --env` is gone. The old per-account cron workflow is not supported.
 
@@ -113,6 +115,7 @@ Examples:
 
 ```sh
 ./run.sh
+./run.sh restart
 ./run.sh logs
 HOST_BIND=0.0.0.0 PORT=8080 ./run.sh
 COOKIE_SECURE=true HOST_BIND=0.0.0.0 ./run.sh
@@ -141,13 +144,13 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 - **Enabled** — when on, that profile is checked on its interval. Leave new profiles off until you have reviewed them.
 - **Run now / Stop** — start or cancel a check immediately.
 - **Logs** — appointment messages (`log` table) and captured stdout/stderr of each run.
-- **Settings** — Gmail sender, admin BCC, heartbeat recipients, max concurrent runs, run timeout.
+- **Settings** — Gmail sender, admin notification emails, heartbeat interval, max concurrent runs, run timeout.
 
-**Notify** emails the profile’s recipients when a matching date exists. **Admin notification BCC** (`email_admin_destination` in Settings) gets a copy; profile recipients do not see that address. A profile can leave notify emails empty to notify only the admin.
+**Notify** emails the profile’s recipients when a matching date exists. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses. A profile can leave notify emails empty to notify only the admin.
 
 **Reschedule** books the first matching date without asking.
 
-**Heartbeat** emails Settings → heartbeat recipients on a successful run, at most once per heartbeat interval (default 1440 minutes).
+**Heartbeat** emails the admin notification addresses on a successful run, at most once per heartbeat interval (default 1440 minutes).
 
 To send mail you need a Gmail **App Password**:
 
@@ -166,7 +169,7 @@ Both bounds are inclusive.
 
 **profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, actions (`notify`, `reschedule`), heartbeat flag, enabled flag, interval.
 
-**setting** — Gmail user, encrypted Gmail app password, admin BCC, heartbeat destination and interval, concurrency, run timeout, admin password hash, key-check ciphertext.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, heartbeat interval, concurrency, run timeout, admin password hash, key-check ciphertext.
 
 **run** — each scheduler/manual execution (status, output, timestamps). Old rows are pruned after 14 days.
 

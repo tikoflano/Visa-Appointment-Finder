@@ -117,13 +117,9 @@
             <input name="gmailAppPassword" type="password" autocomplete="new-password" />
           </label>
           <label class="wide">
-            Admin notification BCC
+            Admin notification emails (comma separated)
             <input name="emailAdminDestination" />
-            <small>Receives a copy of every appointment email. Profile recipients do not see this address.</small>
-          </label>
-          <label class="wide">
-            Heartbeat recipients (comma separated)
-            <input name="heartbeatDestination" />
+            <small>Receives heartbeat emails and a BCC of every appointment notification. Profile recipients do not see these addresses.</small>
           </label>
           <label>Heartbeat every (minutes) <input name="heartbeatMinutes" type="number" min="1" required /></label>
           <label>Max concurrent runs <input name="maxConcurrentRuns" type="number" min="1" required /></label>

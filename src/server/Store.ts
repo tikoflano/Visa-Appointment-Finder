@@ -37,7 +37,6 @@ export interface Settings {
   gmailUser: string;
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
-  heartbeatDestination: string;
   heartbeatMinutes: number;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
@@ -67,10 +66,17 @@ export interface Run {
   output?: string;
 }
 
+function normalizeEmailList(value: unknown): string {
+  return String(value ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(",");
+}
+
 const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
-  heartbeat_destination: "",
   heartbeat_minutes: "1440",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
@@ -193,7 +199,6 @@ export class Store {
       gmailUser: await this.getSetting("gmail_user"),
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
-      heartbeatDestination: await this.getSetting("heartbeat_destination"),
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
@@ -212,11 +217,7 @@ export class Store {
     await this.setRawSetting("gmail_user", String(input.gmailUser ?? "").trim());
     await this.setRawSetting(
       "email_admin_destination",
-      String(input.emailAdminDestination ?? "").trim(),
-    );
-    await this.setRawSetting(
-      "heartbeat_destination",
-      String(input.heartbeatDestination ?? "").trim(),
+      normalizeEmailList(input.emailAdminDestination),
     );
     await this.setRawSetting(
       "heartbeat_minutes",

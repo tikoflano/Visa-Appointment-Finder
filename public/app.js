@@ -345,7 +345,6 @@ $("#open-settings").addEventListener("click", async () => {
   for (const field of [
     "gmailUser",
     "emailAdminDestination",
-    "heartbeatDestination",
     "heartbeatMinutes",
     "maxConcurrentRuns",
     "runTimeoutMinutes",
@@ -367,7 +366,6 @@ settingsForm.addEventListener("submit", async (event) => {
       gmailUser: form.gmailUser.value,
       gmailAppPassword: form.gmailAppPassword.value || undefined,
       emailAdminDestination: form.emailAdminDestination.value,
-      heartbeatDestination: form.heartbeatDestination.value,
       heartbeatMinutes: Number(form.heartbeatMinutes.value),
       maxConcurrentRuns: Number(form.maxConcurrentRuns.value),
       runTimeoutMinutes: Number(form.runTimeoutMinutes.value),
