@@ -249,15 +249,11 @@ function renderProfiles() {
             : badge("none", "muted"),
           profile.heartbeat ? badge("heartbeat", "muted") : null,
         ),
+        el("td", { class: "nowrap" }, runBadge(profile)),
         el(
           "td",
-          {},
-          runBadge(profile),
-          el(
-            "div",
-            { class: "sub", title: formatTimestamp(profile.lastRun?.startedAt) },
-            relativeTime(profile.lastRun?.startedAt),
-          ),
+          { class: "nowrap hint", title: formatTimestamp(profile.lastRun?.startedAt) },
+          relativeTime(profile.lastRun?.startedAt),
         ),
         el(
           "td",
