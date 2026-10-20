@@ -4,45 +4,54 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Visa Appointment Finder</title>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js" data-shoelace="/shoelace"></script>
   </head>
   <body>
     <section id="login-view" hidden>
-      <form id="login-form" class="card login">
-        <h1>Visa Appointment Finder</h1>
-        <p id="setup-hint" class="hint" hidden>
-          Choose an admin password (at least 10 characters) to protect this UI.
-        </p>
-        <label>
-          Admin password
-          <input type="password" name="password" autocomplete="current-password" required autofocus />
-        </label>
-        <label id="confirm-row" hidden>
-          Confirm password
-          <input type="password" name="confirm" autocomplete="new-password" />
-        </label>
-        <p class="error" data-error></p>
-        <button type="submit" class="primary" id="login-submit">Sign in</button>
-      </form>
+      <sl-card class="login">
+        <form id="login-form">
+          <h1>Visa Appointment Finder</h1>
+          <p id="setup-hint" class="hint" hidden>
+            Choose an admin password (at least 10 characters) to protect this UI.
+          </p>
+          <sl-input
+            type="password"
+            name="password"
+            label="Admin password"
+            autocomplete="current-password"
+            required
+            autofocus
+          ></sl-input>
+          <sl-input
+            id="confirm-row"
+            type="password"
+            name="confirm"
+            label="Confirm password"
+            autocomplete="new-password"
+            hidden
+          ></sl-input>
+          <sl-alert variant="danger" data-error></sl-alert>
+          <sl-button type="submit" variant="primary" id="login-submit">Sign in</sl-button>
+        </form>
+      </sl-card>
     </section>
 
     <section id="app-view" hidden>
       <header>
         <h1>Visa Appointment Finder</h1>
         <div class="toolbar">
-          <button id="new-profile" class="primary">New profile</button>
-          <button id="open-settings">Settings</button>
-          <button id="logout">Sign out</button>
+          <sl-button id="new-profile" variant="primary">New profile</sl-button>
+          <sl-button id="open-settings">Settings</sl-button>
+          <sl-button id="logout">Sign out</sl-button>
         </div>
       </header>
 
-      <p id="dev-banner" class="banner" hidden>
+      <sl-alert id="dev-banner" variant="warning" hidden>
         Dev mode: login is skipped and the scheduler is off. The Docker container on port 3000 is unchanged.
-      </p>
-      <p id="settings-warning" class="banner" hidden>
-        Gmail credentials are not configured, so notifications and heartbeats can't be sent.
-        Open <strong>Settings</strong> to add them.
-      </p>
+      </sl-alert>
+      <sl-alert id="settings-warning" variant="warning" hidden>
+        Gmail credentials are not configured, so notifications and heartbeats can't be sent. Open Settings to add them.
+      </sl-alert>
 
       <div class="table-wrap">
       <table class="profiles">
@@ -66,148 +75,159 @@
       </p>
     </section>
 
-    <dialog id="profile-dialog">
-      <form id="profile-form" method="dialog">
-        <h2 data-title>Profile</h2>
+    <sl-dialog id="profile-dialog" label="Profile">
+      <form id="profile-form">
         <div class="grid">
-          <label>Name <input name="name" required /></label>
-          <label>Visa process ID <input name="visaProcessId" inputmode="numeric" required /></label>
-          <label>Visa account email <input name="visaEmail" type="email" autocomplete="off" required /></label>
-          <label>
-            Visa account password
-            <input name="visaPassword" type="password" autocomplete="new-password" />
-          </label>
-          <label class="wide">
-            Notify emails (comma separated)
-            <input name="emailDestination" />
-          </label>
-          <label>Earliest date <input name="minDate" type="date" /></label>
-          <label>
-            Latest date <input name="maxDate" type="date" />
-            <small>Empty means "before the current appointment".</small>
-          </label>
+          <sl-input name="name" label="Name" required></sl-input>
+          <sl-input name="visaProcessId" label="Visa process ID" inputmode="numeric" required></sl-input>
+          <sl-input name="visaEmail" type="email" label="Visa account email" autocomplete="off" required></sl-input>
+          <sl-input name="visaPassword" type="password" label="Visa account password" autocomplete="new-password"></sl-input>
+          <sl-input class="wide" name="emailDestination">
+            <span slot="label" class="label-text">
+              Notify emails (comma separated)
+              <sl-tooltip placement="bottom">
+                <span slot="content">Recipients for appointment found emails. Leave empty to notify only the admin addresses.</span>
+                <sl-icon-button class="help-tip" name="question-circle" label="About notify emails"></sl-icon-button>
+              </sl-tooltip>
+            </span>
+          </sl-input>
+          <sl-input name="minDate" type="date">
+            <span slot="label" class="label-text">
+              Earliest date
+              <sl-tooltip placement="bottom">
+                <span slot="content">Only consider appointments on or after this date. Leave empty for no lower bound.</span>
+                <sl-icon-button class="help-tip" name="question-circle" label="About earliest date"></sl-icon-button>
+              </sl-tooltip>
+            </span>
+          </sl-input>
+          <sl-input name="maxDate" type="date">
+            <span slot="label" class="label-text">
+              Latest date
+              <sl-tooltip placement="bottom">
+                <span slot="content">Leave empty to search strictly before the appointment already booked on AIS. If there is no booked appointment, set a date or the run fails.</span>
+                <sl-icon-button class="help-tip" name="question-circle" label="About latest date"></sl-icon-button>
+              </sl-tooltip>
+            </span>
+          </sl-input>
         </div>
         <fieldset>
           <legend>When an appointment is found</legend>
-          <label class="inline"><input type="checkbox" name="action" value="notify" /> Send email notification</label>
-          <label class="inline">
-            <input type="checkbox" name="action" value="reschedule" /> Reschedule automatically
-            <small class="warn">Books the first matching date without asking.</small>
-          </label>
+          <sl-checkbox name="action" value="notify">Send email notification</sl-checkbox>
+          <div class="check-row">
+            <sl-checkbox name="action" value="reschedule">Reschedule automatically</sl-checkbox>
+            <sl-tooltip placement="bottom">
+              <span slot="content">Books the first matching date without asking.</span>
+              <sl-icon-button class="help-tip" name="question-circle" label="About automatic reschedule"></sl-icon-button>
+            </sl-tooltip>
+          </div>
         </fieldset>
-        <label class="inline"><input type="checkbox" name="heartbeat" /> Send heartbeat emails</label>
-        <label class="inline"><input type="checkbox" name="enabled" /> Enabled (run on schedule)</label>
-        <p class="error" data-error></p>
-        <div class="dialog-actions">
-          <button type="button" class="danger" data-delete>Delete</button>
-          <span class="spacer"></span>
-          <button type="button" data-close>Cancel</button>
-          <button type="submit" class="primary">Save</button>
-        </div>
+        <sl-checkbox name="heartbeat">Send heartbeat emails</sl-checkbox>
+        <sl-checkbox name="enabled">Enabled (run on schedule)</sl-checkbox>
+        <sl-alert variant="danger" data-error></sl-alert>
       </form>
-    </dialog>
+      <div slot="footer" class="dialog-actions">
+        <sl-button variant="danger" data-delete>Delete</sl-button>
+        <span class="spacer"></span>
+        <sl-button data-close>Cancel</sl-button>
+        <sl-button variant="primary" type="submit" form="profile-form">Save</sl-button>
+      </div>
+    </sl-dialog>
 
-    <dialog id="settings-dialog">
-      <form id="settings-form" method="dialog">
-        <h2>Settings</h2>
+    <sl-dialog id="settings-dialog" label="Settings">
+      <form id="settings-form">
         <div class="grid">
-          <label>
-            <span class="label-text">
+          <sl-input name="gmailUser" type="email" autocomplete="off">
+            <span slot="label" class="label-text">
               Gmail user
               <sl-tooltip placement="bottom">
                 <span slot="content">Gmail account that sends appointment emails and heartbeats.</span>
-                <button type="button" class="help-tip" aria-label="About Gmail user">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About Gmail user"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="gmailUser" type="email" autocomplete="off" />
-          </label>
-          <label>
-            <span class="label-text">
+          </sl-input>
+          <sl-input name="gmailAppPassword" type="password" autocomplete="new-password">
+            <span slot="label" class="label-text">
               Gmail app password
               <sl-tooltip placement="bottom">
                 <span slot="content">Google app password for that Gmail account, not the normal login password. Leave blank to keep the stored one.</span>
-                <button type="button" class="help-tip" aria-label="About Gmail app password">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About Gmail app password"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="gmailAppPassword" type="password" autocomplete="new-password" />
-          </label>
-          <label class="wide">
-            <span class="label-text">
+          </sl-input>
+          <sl-input class="wide" name="emailAdminDestination">
+            <span slot="label" class="label-text">
               Admin notification emails (comma separated)
               <sl-tooltip placement="bottom">
                 <span slot="content">Receives heartbeat emails and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
-                <button type="button" class="help-tip" aria-label="About admin notification emails">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About admin notification emails"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="emailAdminDestination" />
-          </label>
-          <label>
-            <span class="label-text">
+          </sl-input>
+          <sl-input name="intervalMinutes" type="number" min="1" required>
+            <span slot="label" class="label-text">
               Check every (minutes)
               <sl-tooltip placement="bottom">
                 <span slot="content">How often every enabled profile is checked. One interval for the whole app, not per profile.</span>
-                <button type="button" class="help-tip" aria-label="About check interval">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About check interval"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="intervalMinutes" type="number" min="1" required />
-          </label>
-          <label>
-            <span class="label-text">
+          </sl-input>
+          <sl-input name="heartbeatMinutes" type="number" min="1" required>
+            <span slot="label" class="label-text">
               Heartbeat every (minutes)
               <sl-tooltip placement="bottom">
                 <span slot="content">Minimum time between heartbeat emails after a successful check. Heartbeats go to the admin notification addresses.</span>
-                <button type="button" class="help-tip" aria-label="About heartbeat interval">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="heartbeatMinutes" type="number" min="1" required />
-          </label>
-          <label>
-            <span class="label-text">
+          </sl-input>
+          <sl-input name="maxConcurrentRuns" type="number" min="1" required>
+            <span slot="label" class="label-text">
               Max concurrent runs
               <sl-tooltip placement="bottom">
                 <span slot="content">How many visa checks can run at the same time. Extra due profiles wait in a queue.</span>
-                <button type="button" class="help-tip" aria-label="About max concurrent runs">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About max concurrent runs"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="maxConcurrentRuns" type="number" min="1" required />
-          </label>
-          <label>
-            <span class="label-text">
+          </sl-input>
+          <sl-input name="runTimeoutMinutes" type="number" min="1" required>
+            <span slot="label" class="label-text">
               Run timeout (minutes)
               <sl-tooltip placement="bottom">
                 <span slot="content">A check that runs longer than this is killed so a stuck browser cannot block the queue.</span>
-                <button type="button" class="help-tip" aria-label="About run timeout">?</button>
+                <sl-icon-button class="help-tip" name="question-circle" label="About run timeout"></sl-icon-button>
               </sl-tooltip>
             </span>
-            <input name="runTimeoutMinutes" type="number" min="1" required />
-          </label>
+          </sl-input>
         </div>
-        <p class="error" data-error></p>
-        <div class="dialog-actions">
-          <span class="spacer"></span>
-          <button type="button" data-close>Cancel</button>
-          <button type="submit" class="primary">Save</button>
-        </div>
+        <sl-alert variant="danger" data-error></sl-alert>
       </form>
-    </dialog>
-
-    <dialog id="logs-dialog" class="wide-dialog">
-      <h2 data-title>Logs</h2>
-      <div class="tabs">
-        <button type="button" data-tab="messages" class="active">Messages</button>
-        <button type="button" data-tab="runs">Runs</button>
-      </div>
-      <div data-panel="messages">
-        <table class="logs"><tbody data-messages></tbody></table>
-      </div>
-      <div data-panel="runs" hidden>
-        <table class="logs"><tbody data-runs></tbody></table>
-        <pre data-output hidden></pre>
-      </div>
-      <div class="dialog-actions">
+      <div slot="footer" class="dialog-actions">
         <span class="spacer"></span>
-        <button type="button" data-close>Close</button>
+        <sl-button data-close>Cancel</sl-button>
+        <sl-button variant="primary" type="submit" form="settings-form">Save</sl-button>
       </div>
-    </dialog>
+    </sl-dialog>
+
+    <sl-dialog id="logs-dialog" class="wide-dialog" label="Logs">
+      <sl-tab-group>
+        <sl-tab slot="nav" panel="messages">Messages</sl-tab>
+        <sl-tab slot="nav" panel="runs">Runs</sl-tab>
+        <sl-tab-panel name="messages">
+          <table class="logs"><tbody data-messages></tbody></table>
+        </sl-tab-panel>
+        <sl-tab-panel name="runs">
+          <table class="logs"><tbody data-runs></tbody></table>
+          <pre data-output hidden></pre>
+        </sl-tab-panel>
+      </sl-tab-group>
+      <sl-button slot="footer" data-close>Close</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="confirm-dialog" label="Confirm">
+      <p data-message></p>
+      <sl-button slot="footer" data-confirm-no>Cancel</sl-button>
+      <sl-button slot="footer" variant="primary" data-confirm-yes>Continue</sl-button>
+    </sl-dialog>
   </body>
 </html>

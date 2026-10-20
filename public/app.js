@@ -1,14 +1,28 @@
+import "./shoelace-base.js";
 import "@shoelace-style/shoelace/dist/themes/light.css";
+import "@shoelace-style/shoelace/dist/components/alert/alert.js";
+import "@shoelace-style/shoelace/dist/components/badge/badge.js";
+import "@shoelace-style/shoelace/dist/components/button/button.js";
+import "@shoelace-style/shoelace/dist/components/card/card.js";
+import "@shoelace-style/shoelace/dist/components/checkbox/checkbox.js";
+import "@shoelace-style/shoelace/dist/components/dialog/dialog.js";
+import "@shoelace-style/shoelace/dist/components/icon-button/icon-button.js";
+import "@shoelace-style/shoelace/dist/components/input/input.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
+import "@shoelace-style/shoelace/dist/components/tab/tab.js";
+import "@shoelace-style/shoelace/dist/components/tab-group/tab-group.js";
+import "@shoelace-style/shoelace/dist/components/tab-panel/tab-panel.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
 
 const REFRESH_MS = 10000;
 const $ = (selector, root = document) => root.querySelector(selector);
+const named = (form, name) => form.querySelector(`[name="${name}"]`);
 
 let profiles = [];
 let refreshTimer;
 let setupMode = false;
+let confirmResolve;
 
 async function api(method, url, body) {
   const response = await fetch(url, {
@@ -31,8 +45,8 @@ function el(tag, attrs = {}, ...children) {
   for (const [key, value] of Object.entries(attrs)) {
     if (key === "class") node.className = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else if (value === true) node.setAttribute(key, "");
-    else if (value !== false && value != null) node.setAttribute(key, value);
+    else if (typeof value === "boolean") node[key] = value;
+    else if (value != null) node.setAttribute(key, value);
   }
   for (const child of children.flat()) {
     if (child != null) node.append(child instanceof Node ? child : String(child));
@@ -59,12 +73,55 @@ function relativeTime(iso) {
   return `${Math.round(minutes / 60 / 24)}d ago`;
 }
 
+function dateWindow(profile) {
+  if (!profile.minDate && !profile.maxDate) return "before booked";
+  return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate) || "booked"}`;
+}
+
 function badge(text, kind) {
-  return el("span", { class: `badge ${kind}` }, text);
+  const variant =
+    { ok: "success", bad: "danger", warn: "warning", info: "primary", muted: "neutral" }[kind] ||
+    "neutral";
+  return el("sl-badge", { variant, pill: true }, text);
 }
 
 function setError(form, message) {
-  $("[data-error]", form).textContent = message || "";
+  const alert = $("[data-error]", form);
+  if (!alert) return;
+  alert.innerHTML = message || "";
+  alert.open = !!message;
+}
+
+function toast(message, variant = "danger") {
+  const node = el("sl-alert", { variant, closable: true, duration: 4000 }, message);
+  document.body.append(node);
+  node.toast();
+}
+
+function confirmAction(message, { okLabel = "Continue", variant = "primary" } = {}) {
+  const dialog = $("#confirm-dialog");
+  $("[data-message]", dialog).textContent = message;
+  const yes = $("[data-confirm-yes]", dialog);
+  yes.textContent = okLabel;
+  yes.variant = variant;
+  dialog.show();
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+  });
+}
+
+function settleConfirm(result) {
+  if (!confirmResolve) return;
+  const resolve = confirmResolve;
+  confirmResolve = undefined;
+  $("#confirm-dialog").hide();
+  resolve(result);
+}
+
+function setBanner(id, visible) {
+  const banner = $(id);
+  banner.hidden = !visible;
+  banner.open = !!visible;
 }
 
 // ---- Session ----
@@ -86,16 +143,15 @@ function showLogin(setupRequired) {
   $("#setup-hint").hidden = !setupMode;
   $("#confirm-row").hidden = !setupMode;
   $("#login-submit").textContent = setupMode ? "Create password" : "Sign in";
-  const password = $("#login-form").password;
-  const confirm = $("#login-form").confirm;
-  password.autocomplete = setupMode ? "new-password" : "current-password";
-  confirm.required = setupMode;
+  const form = $("#login-form");
+  named(form, "password").autocomplete = setupMode ? "new-password" : "current-password";
+  named(form, "confirm").required = setupMode;
 }
 
 function showApp(dev) {
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
-  $("#dev-banner").hidden = !dev;
+  setBanner("#dev-banner", !!dev);
   refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
@@ -107,12 +163,12 @@ $("#login-form").addEventListener("submit", async (event) => {
   setError(form);
   try {
     if (setupMode) {
-      if (form.password.value !== form.confirm.value) {
+      if (named(form, "password").value !== named(form, "confirm").value) {
         throw new Error("Passwords do not match");
       }
-      await api("POST", "/api/setup", { password: form.password.value });
+      await api("POST", "/api/setup", { password: named(form, "password").value });
     } else {
-      await api("POST", "/api/login", { password: form.password.value });
+      await api("POST", "/api/login", { password: named(form, "password").value });
     }
     form.reset();
     showApp();
@@ -126,6 +182,10 @@ $("#logout").addEventListener("click", async () => {
   showLogin(false);
 });
 
+$("[data-confirm-yes]").addEventListener("click", () => settleConfirm(true));
+$("[data-confirm-no]").addEventListener("click", () => settleConfirm(false));
+$("#confirm-dialog").addEventListener("sl-request-close", () => settleConfirm(false));
+
 // ---- Profiles table ----
 
 async function refresh() {
@@ -135,7 +195,7 @@ async function refresh() {
       api("GET", "/api/settings"),
     ]);
     profiles = profileList;
-    $("#settings-warning").hidden = !!(settings.gmailUser && settings.hasGmailAppPassword);
+    setBanner("#settings-warning", !(settings.gmailUser && settings.hasGmailAppPassword));
     renderProfiles();
   } catch (error) {
     console.error(error);
@@ -170,23 +230,15 @@ function renderProfiles() {
   const tbody = $("#profile-rows");
   tbody.replaceChildren(
     ...profiles.map((profile) => {
-      const window =
-        profile.minDate || profile.maxDate
-          ? `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate) || "current"}`
-          : "before current";
       const busy = profile.state !== "idle";
 
       return el(
         "tr",
         { class: profile.enabled ? "" : "disabled" },
-        el(
-          "td",
-          { class: "col-enabled" },
-          enableSwitch(profile),
-        ),
+        el("td", { class: "col-enabled" }, enableSwitch(profile)),
         el("td", {}, el("strong", {}, profile.name), el("div", { class: "sub" }, profile.visaEmail)),
         el("td", { class: "mono nowrap" }, profile.visaProcessId),
-        el("td", { class: "nowrap" }, window),
+        el("td", { class: "nowrap" }, dateWindow(profile)),
         el(
           "td",
           {},
@@ -224,10 +276,10 @@ function renderProfiles() {
             "div",
             { class: "row-actions" },
             busy
-              ? el("button", { onclick: () => cancelRun(profile) }, "Stop")
-              : el("button", { onclick: () => runNow(profile) }, "Run now"),
-            el("button", { onclick: () => openLogs(profile) }, "Logs"),
-            el("button", { onclick: () => openProfile(profile) }, "Edit"),
+              ? el("sl-button", { size: "small", variant: "danger", onclick: () => cancelRun(profile) }, "Stop")
+              : el("sl-button", { size: "small", onclick: () => runNow(profile) }, "Run now"),
+            el("sl-button", { size: "small", onclick: () => openLogs(profile) }, "Logs"),
+            el("sl-button", { size: "small", onclick: () => openProfile(profile) }, "Edit"),
           ),
         ),
       );
@@ -240,7 +292,7 @@ async function toggleEnabled(profile, enabled) {
   try {
     await api("POST", `/api/profiles/${profile.id}/enabled`, { enabled });
   } catch (error) {
-    alert(error.message);
+    toast(error.message);
   }
   refresh();
 }
@@ -249,7 +301,7 @@ async function runNow(profile) {
   try {
     await api("POST", `/api/profiles/${profile.id}/run`, {});
   } catch (error) {
-    alert(error.message);
+    toast(error.message);
   }
   refresh();
 }
@@ -257,6 +309,10 @@ async function runNow(profile) {
 async function cancelRun(profile) {
   await api("POST", `/api/profiles/${profile.id}/cancel`, {});
   refresh();
+}
+
+function actionCheckboxes(form) {
+  return [...form.querySelectorAll("sl-checkbox[name=action]")];
 }
 
 // ---- Profile dialog ----
@@ -269,8 +325,8 @@ function openProfile(profile) {
   editingProfile = profile || null;
   profileForm.reset();
   setError(profileForm);
-  $("[data-title]", profileForm).textContent = profile ? `Edit ${profile.name}` : "New profile";
-  $("[data-delete]", profileForm).hidden = !profile;
+  profileDialog.label = profile ? `Edit ${profile.name}` : "New profile";
+  $("[data-delete]").hidden = !profile;
 
   const values = profile || {
     actions: ["notify"],
@@ -278,19 +334,19 @@ function openProfile(profile) {
     enabled: true,
   };
   for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate"]) {
-    profileForm[field].value = values[field] ?? "";
+    named(profileForm, field).value = values[field] ?? "";
   }
-  for (const checkbox of profileForm.querySelectorAll("[name=action]")) {
+  for (const checkbox of actionCheckboxes(profileForm)) {
     checkbox.checked = values.actions.includes(checkbox.value);
   }
-  profileForm.heartbeat.checked = !!values.heartbeat;
-  profileForm.enabled.checked = !!values.enabled;
+  named(profileForm, "heartbeat").checked = !!values.heartbeat;
+  named(profileForm, "enabled").checked = !!values.enabled;
 
-  const password = profileForm.visaPassword;
+  const password = named(profileForm, "visaPassword");
   password.required = !profile;
   password.placeholder = profile ? "Leave empty to keep the stored password" : "";
 
-  profileDialog.showModal();
+  profileDialog.show();
 }
 
 $("#new-profile").addEventListener("click", () => openProfile(null));
@@ -299,27 +355,32 @@ profileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setError(profileForm);
   const form = profileForm;
-  const actions = [...form.querySelectorAll("[name=action]:checked")].map((input) => input.value);
+  const actions = actionCheckboxes(form)
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => checkbox.value);
 
   if (
     actions.includes("reschedule") &&
     !(editingProfile?.actions || []).includes("reschedule") &&
-    !confirm("Automatic rescheduling will book the first matching date without asking. Continue?")
+    !(await confirmAction(
+      "Automatic rescheduling will book the first matching date without asking. Continue?",
+      { okLabel: "Enable reschedule", variant: "warning" },
+    ))
   ) {
     return;
   }
 
   const body = {
-    name: form.name.value,
-    visaProcessId: form.visaProcessId.value,
-    visaEmail: form.visaEmail.value,
-    visaPassword: form.visaPassword.value || undefined,
-    emailDestination: form.emailDestination.value,
-    minDate: form.minDate.value || null,
-    maxDate: form.maxDate.value || null,
+    name: named(form, "name").value,
+    visaProcessId: named(form, "visaProcessId").value,
+    visaEmail: named(form, "visaEmail").value,
+    visaPassword: named(form, "visaPassword").value || undefined,
+    emailDestination: named(form, "emailDestination").value,
+    minDate: named(form, "minDate").value || null,
+    maxDate: named(form, "maxDate").value || null,
     actions,
-    heartbeat: form.heartbeat.checked,
-    enabled: form.enabled.checked,
+    heartbeat: named(form, "heartbeat").checked,
+    enabled: named(form, "enabled").checked,
   };
 
   try {
@@ -328,20 +389,26 @@ profileForm.addEventListener("submit", async (event) => {
     } else {
       await api("POST", "/api/profiles", body);
     }
-    profileDialog.close();
+    profileDialog.hide();
     refresh();
   } catch (error) {
     setError(profileForm, error.message);
   }
 });
 
-$("[data-delete]", profileForm).addEventListener("click", async () => {
-  if (!editingProfile || !confirm(`Delete profile "${editingProfile.name}"? Its stored password will be removed.`)) {
+$("[data-delete]").addEventListener("click", async () => {
+  if (
+    !editingProfile ||
+    !(await confirmAction(`Delete profile "${editingProfile.name}"? Its stored password will be removed.`, {
+      okLabel: "Delete",
+      variant: "danger",
+    }))
+  ) {
     return;
   }
   try {
     await api("DELETE", `/api/profiles/${editingProfile.id}`, {});
-    profileDialog.close();
+    profileDialog.hide();
     refresh();
   } catch (error) {
     setError(profileForm, error.message);
@@ -365,12 +432,12 @@ $("#open-settings").addEventListener("click", async () => {
     "maxConcurrentRuns",
     "runTimeoutMinutes",
   ]) {
-    settingsForm[field].value = settings[field] ?? "";
+    named(settingsForm, field).value = settings[field] ?? "";
   }
-  settingsForm.gmailAppPassword.placeholder = settings.hasGmailAppPassword
+  named(settingsForm, "gmailAppPassword").placeholder = settings.hasGmailAppPassword
     ? "Leave empty to keep the stored password"
     : "Not set";
-  settingsDialog.showModal();
+  settingsDialog.show();
 });
 
 settingsForm.addEventListener("submit", async (event) => {
@@ -379,15 +446,15 @@ settingsForm.addEventListener("submit", async (event) => {
   setError(form);
   try {
     await api("PUT", "/api/settings", {
-      gmailUser: form.gmailUser.value,
-      gmailAppPassword: form.gmailAppPassword.value || undefined,
-      emailAdminDestination: form.emailAdminDestination.value,
-      intervalMinutes: Number(form.intervalMinutes.value),
-      heartbeatMinutes: Number(form.heartbeatMinutes.value),
-      maxConcurrentRuns: Number(form.maxConcurrentRuns.value),
-      runTimeoutMinutes: Number(form.runTimeoutMinutes.value),
+      gmailUser: named(form, "gmailUser").value,
+      gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
+      emailAdminDestination: named(form, "emailAdminDestination").value,
+      intervalMinutes: Number(named(form, "intervalMinutes").value),
+      heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
+      maxConcurrentRuns: Number(named(form, "maxConcurrentRuns").value),
+      runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
     });
-    settingsDialog.close();
+    settingsDialog.hide();
     refresh();
   } catch (error) {
     setError(form, error.message);
@@ -399,10 +466,10 @@ settingsForm.addEventListener("submit", async (event) => {
 const logsDialog = $("#logs-dialog");
 
 async function openLogs(profile) {
-  $("[data-title]", logsDialog).textContent = `Logs — ${profile.name}`;
+  logsDialog.label = `Logs — ${profile.name}`;
   $("[data-output]", logsDialog).hidden = true;
-  selectTab("messages");
-  logsDialog.showModal();
+  $("sl-tab-group", logsDialog).show("messages");
+  logsDialog.show();
 
   const [messages, runs] = await Promise.all([
     api("GET", `/api/profiles/${profile.id}/logs?limit=300`),
@@ -444,24 +511,12 @@ async function showRunOutput(runId) {
   const output = $("[data-output]", logsDialog);
   output.textContent = run.output || "(no output)";
   output.hidden = false;
+  $("sl-tab-group", logsDialog).show("runs");
   output.scrollIntoView({ block: "nearest" });
 }
 
-function selectTab(name) {
-  for (const tab of logsDialog.querySelectorAll("[data-tab]")) {
-    tab.classList.toggle("active", tab.dataset.tab === name);
-  }
-  for (const panel of logsDialog.querySelectorAll("[data-panel]")) {
-    panel.hidden = panel.dataset.panel !== name;
-  }
-}
-
-for (const tab of logsDialog.querySelectorAll("[data-tab]")) {
-  tab.addEventListener("click", () => selectTab(tab.dataset.tab));
-}
-
 for (const button of document.querySelectorAll("[data-close]")) {
-  button.addEventListener("click", () => button.closest("dialog").close());
+  button.addEventListener("click", () => button.closest("sl-dialog").hide());
 }
 
 boot();

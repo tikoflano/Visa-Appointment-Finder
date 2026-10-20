@@ -31,11 +31,6 @@ h1 {
   margin: 0;
 }
 
-h2 {
-  font-size: 17px;
-  margin: 0 0 16px;
-}
-
 header {
   display: flex;
   align-items: center;
@@ -44,7 +39,9 @@ header {
 }
 
 .toolbar,
-.row-actions {
+.row-actions,
+.dialog-actions,
+.check-row {
   display: flex;
   gap: 6px;
   align-items: center;
@@ -54,70 +51,20 @@ header {
   flex-wrap: nowrap;
 }
 
-button {
-  font: inherit;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--text);
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--muted);
-}
-
-button.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-
-button.danger {
-  color: var(--bad);
-}
-
-input:not([type="checkbox"]) {
-  font: inherit;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-weight: 500;
-}
-
 .label-text {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-button.help-tip {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--muted);
-  background: transparent;
+sl-icon-button.help-tip {
+  font-size: 16px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 14px;
   cursor: help;
 }
 
-button.help-tip:hover,
-button.help-tip:focus-visible {
-  border-color: var(--primary);
+sl-icon-button.help-tip:hover,
+sl-icon-button.help-tip:focus-visible {
   color: var(--primary);
 }
 
@@ -127,40 +74,16 @@ sl-tooltip {
   font-weight: normal;
 }
 
-label.inline {
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-weight: normal;
-  margin: 6px 0;
-}
-
-small {
-  color: var(--muted);
-  font-weight: normal;
-}
-
-small.warn {
-  color: var(--warn);
-}
-
-code,
-.mono {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 12.5px;
-}
-
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 24px;
+sl-alert {
+  margin-bottom: 12px;
 }
 
 .login {
-  max-width: 340px;
+  max-width: 360px;
   margin: 10vh auto;
+}
+
+.login form {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -176,17 +99,10 @@ code,
   margin-top: 2px;
 }
 
-.error {
-  color: var(--bad);
-  margin: 8px 0 0;
-  min-height: 1em;
-}
-
-.banner {
-  background: #fff4e5;
-  border: 1px solid #f5c98a;
-  border-radius: 8px;
-  padding: 10px 14px;
+code,
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
 }
 
 table {
@@ -250,6 +166,10 @@ td.message {
   max-width: 320px;
 }
 
+td sl-badge {
+  margin: 0 4px 2px 0;
+}
+
 .clamp {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -261,36 +181,13 @@ td.message {
   white-space: nowrap;
 }
 
-.badge {
-  display: inline-block;
-  padding: 1px 8px;
-  margin: 0 4px 2px 0;
-  border-radius: 999px;
-  font-size: 12px;
-  border: 1px solid currentColor;
-  white-space: nowrap;
-}
-
-.badge.ok { color: var(--ok); }
-.badge.bad { color: var(--bad); }
-.badge.warn { color: var(--warn); }
-.badge.info { color: var(--info); }
-.badge.muted { color: var(--muted); }
-
-dialog {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
+sl-dialog::part(panel) {
   width: min(640px, 92vw);
-  overflow: visible;
+  max-width: none;
 }
 
-dialog.wide-dialog {
+sl-dialog.wide-dialog::part(panel) {
   width: min(960px, 94vw);
-}
-
-dialog::backdrop {
-  background: rgba(20, 24, 35, 0.4);
 }
 
 .grid {
@@ -300,6 +197,10 @@ dialog::backdrop {
   margin-bottom: 12px;
 }
 
+.grid sl-input {
+  width: 100%;
+}
+
 .grid .wide {
   grid-column: 1 / -1;
 }
@@ -307,7 +208,10 @@ dialog::backdrop {
 fieldset {
   border: 1px solid var(--border);
   border-radius: 8px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 legend {
@@ -315,29 +219,15 @@ legend {
   padding: 0 4px;
 }
 
-.dialog-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
+#profile-form > sl-checkbox {
+  margin: 4px 0;
 }
 
 .spacer {
   flex: 1;
 }
 
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 12px;
-}
-
-.tabs button.active {
-  background: var(--text);
-  border-color: var(--text);
-  color: #fff;
-}
-
-[data-panel] {
+sl-tab-panel {
   max-height: 60vh;
   overflow: auto;
 }

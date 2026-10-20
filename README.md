@@ -164,10 +164,10 @@ To send mail you need a Gmail **App Password**:
 
 ## Date range
 
-- **Earliest date**: appointments on or after this date.
-- **Latest date**: appointments on or before this date. If omitted, only dates **strictly before** the account’s current appointment are considered.
+- **Earliest date**: appointments on or after this date. Empty means no lower bound.
+- **Latest date**: appointments on or before this date. Empty means **strictly before** the account’s currently booked appointment on AIS. If AIS has no booked appointment, the run fails unless you set a date.
 
-Both bounds are inclusive.
+A filled-in latest date is inclusive. An empty latest date is exclusive of the booked appointment, so you do not match the slot you already have.
 
 ## What is stored in SQLite
 
