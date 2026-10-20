@@ -2,7 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
-import { sendHeartbeat } from "./heartbeat";
+import { Notifier } from "./Notifier";
 import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
 import { openDatabase, Store, ValidationError } from "./Store";
@@ -15,6 +15,7 @@ const LOGIN_LOCKOUT_THRESHOLD = 10;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 const DEV =
   process.env.VISA_DEV === "1" || process.env.VISA_DEV === "true";
+const VITE_ORIGIN = `http://127.0.0.1:${process.env.VITE_DEV_PORT || "5173"}`;
 
 const PUBLIC_DIR = path.resolve(
   process.env.PUBLIC_DIR || path.join(__dirname, "..", "ui"),
@@ -126,6 +127,26 @@ function parseNotifiedQuery(value: string | null): boolean | undefined {
   throw new HttpError(400, "Invalid notified");
 }
 
+function parseNotificationKind(
+  value: string | null,
+): "appointment" | "heartbeat" | "failure" | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === "appointment" || raw === "heartbeat" || raw === "failure") {
+    return raw;
+  }
+  throw new HttpError(400, "Invalid kind");
+}
+
+function parseNotificationStatus(
+  value: string | null,
+): "sent" | "failed" | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === "sent" || raw === "failed") return raw;
+  throw new HttpError(400, "Invalid status");
+}
+
 function parseOrderQuery(value: string | null): "asc" | "desc" {
   const raw = value?.trim().toLowerCase();
   if (!raw || raw === "desc") return "desc";
@@ -185,7 +206,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const store = new Store(db, SecretBox.fromEnvironment());
   await store.initialize();
 
-  const scheduler = new Scheduler(store);
+  const notifier = new Notifier(store);
+  const scheduler = new Scheduler(store, notifier);
   const sessions = new Sessions();
   const failedLogins: number[] = [];
 
@@ -390,7 +412,27 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     {
       method: "POST",
       pattern: /^\/api\/heartbeat$/,
-      handler: async () => sendHeartbeat(store, { force: true }),
+      handler: async () => notifier.sendHeartbeat({ force: true }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/notifications$/,
+      handler: async ({ url }) => {
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 500);
+        const from = parseIsoQuery(url.searchParams.get("from"), "from");
+        const to = parseIsoQuery(url.searchParams.get("to"), "to");
+        if (from && to && from > to) throw new HttpError(400, "From must be before To");
+        const kind = parseNotificationKind(url.searchParams.get("kind"));
+        const status = parseNotificationStatus(url.searchParams.get("status"));
+        return {
+          notifications: await store.listNotifications(limit, {
+            from,
+            to,
+            kind,
+            status,
+          }),
+        };
+      },
     },
   ];
 
@@ -398,6 +440,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const url = new URL(req.url || "/", "http://localhost");
 
     try {
+      // Raw files in public/ need Vite to resolve CSS/JS imports. Send the
+      // browser there instead of serving an unstyled page from the API port.
+      if (DEV && req.method === "GET" && !url.pathname.startsWith("/api/")) {
+        res.writeHead(302, {
+          Location: `${VITE_ORIGIN}${url.pathname}${url.search}`,
+        });
+        res.end();
+        return;
+      }
+
       const staticFile =
         req.method === "GET" &&
         !url.pathname.startsWith("/api/") &&
@@ -452,13 +504,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       throw Error("VISA_DEV is only allowed when HOST is 127.0.0.1");
     }
     console.warn(
-      `Dev mode on http://${HOST}:${PORT} — login skipped, scheduler off`,
+      `Dev mode — login skipped, scheduler and notifier off. Open ${VITE_ORIGIN}`,
     );
   } else {
     await scheduler.start();
+    await notifier.start();
   }
   server.listen(PORT, HOST, () => {
-    console.log(`Management UI listening on http://${HOST}:${PORT}`);
+    if (DEV) {
+      console.log(`API listening on http://${HOST}:${PORT}`);
+      console.log(`Open the UI at ${VITE_ORIGIN}`);
+    } else {
+      console.log(`Management UI listening on http://${HOST}:${PORT}`);
+    }
   });
   if (!(await store.hasAdminPassword())) {
     console.warn(
@@ -473,6 +531,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     console.log("Shutting down...");
     server.close();
     await scheduler.stop();
+    await notifier.stop();
     await db.close();
     process.exit(0);
   };

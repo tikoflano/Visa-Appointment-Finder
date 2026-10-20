@@ -15,14 +15,14 @@ export class EmailService {
   private transporter: Transporter;
   private readonly fromUser: string;
 
-  constructor(auth?: { user: string; pass: string }) {
-    this.fromUser = auth?.user || process.env.GMAIL_APP_USER || "";
+  constructor(auth: { user: string; pass: string }) {
+    this.fromUser = auth.user;
     this.transporter = nodemailer.createTransport({
       host: "smtp.gmail.com",
       port: 587,
       auth: {
-        user: this.fromUser,
-        pass: auth?.pass || process.env.GMAIL_APP_PASSWORD,
+        user: auth.user,
+        pass: auth.pass,
       },
     });
   }

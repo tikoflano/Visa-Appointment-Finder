@@ -8,7 +8,6 @@ import {
   windowsOverlap,
 } from "../botResult";
 import { Action } from "../types";
-import { DatabaseService } from "../services/DatabaseService";
 import { SecretBox } from "./SecretBox";
 
 type Db = Database<sqlite3.Database, sqlite3.Statement>;
@@ -55,6 +54,36 @@ export interface Settings {
 export interface SettingsInput
   extends Omit<Settings, "hasGmailAppPassword" | "lastHeartbeatAt"> {
   gmailAppPassword?: string;
+}
+
+export type NotificationKind = "appointment" | "heartbeat" | "failure";
+export type NotificationStatus = "sent" | "failed";
+
+export interface NotificationInput {
+  kind: NotificationKind;
+  channel?: string;
+  status: NotificationStatus;
+  profileId?: number | null;
+  runId?: number | null;
+  recipients: string;
+  subject: string;
+  summary: string;
+  error?: string | null;
+}
+
+export interface NotificationRecord {
+  id: number;
+  sentAt: string;
+  kind: NotificationKind;
+  channel: string;
+  status: NotificationStatus;
+  profileId: number | null;
+  profileName: string | null;
+  runId: number | null;
+  recipients: string;
+  subject: string;
+  summary: string;
+  error: string | null;
 }
 
 export type RunStatus =
@@ -130,8 +159,6 @@ export class Store {
   }
 
   async initialize(): Promise<void> {
-    await new DatabaseService(this.db).initialize();
-
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS profile (
         id INTEGER PRIMARY KEY,
@@ -166,10 +193,38 @@ export class Store {
         finished_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS log (
+        id INTEGER PRIMARY KEY,
+        timestamp DATE DEFAULT (datetime('now','localtime')),
+        visa_process_id INTEGER,
+        message TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS heartbeat_notification (
+        id INTEGER PRIMARY KEY,
+        timestamp DATE DEFAULT (datetime('now','localtime')),
+        visa_process_id INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS notification (
+        id INTEGER PRIMARY KEY,
+        sent_at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'email',
+        status TEXT NOT NULL,
+        profile_id INTEGER,
+        run_id INTEGER,
+        recipients TEXT NOT NULL DEFAULT '',
+        subject TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        error TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS run_profile_idx ON run (profile_id, id);
       CREATE INDEX IF NOT EXISTS log_process_idx ON log (visa_process_id, id);
       CREATE UNIQUE INDEX IF NOT EXISTS profile_process_idx
         ON profile (visa_process_id);
+      CREATE INDEX IF NOT EXISTS notification_sent_idx ON notification (id DESC);
     `);
 
     const profileColumns: { name: string }[] = await this.db.all(
@@ -207,6 +262,7 @@ export class Store {
       await this.db.exec("ALTER TABLE run ADD COLUMN result TEXT");
     }
 
+    await this.backfillNotifications();
     await this.verifyMasterKey();
   }
 
@@ -596,6 +652,10 @@ export class Store {
 
   async deleteProfile(id: number): Promise<void> {
     await this.db.run("DELETE FROM run WHERE profile_id = ?", [id]);
+    await this.db.run(
+      "UPDATE notification SET profile_id = NULL, run_id = NULL WHERE profile_id = ?",
+      [id],
+    );
     await this.db.run("DELETE FROM profile WHERE id = ?", [id]);
   }
 
@@ -802,5 +862,190 @@ export class Store {
       "SELECT id, timestamp, message FROM log WHERE visa_process_id = ? ORDER BY id DESC LIMIT ?",
       [processId, limit],
     );
+  }
+
+  // ---- Notifications ----
+
+  async insertNotification(input: NotificationInput): Promise<number> {
+    const result = await this.db.run(
+      `INSERT INTO notification
+         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        new Date().toISOString(),
+        input.kind,
+        input.channel || "email",
+        input.status,
+        input.profileId ?? null,
+        input.runId ?? null,
+        input.recipients,
+        input.subject,
+        input.summary,
+        input.error ?? null,
+      ],
+    );
+    return result.lastID!;
+  }
+
+  async listNotifications(
+    limit: number,
+    range: {
+      from?: string;
+      to?: string;
+      kind?: NotificationKind;
+      status?: NotificationStatus;
+    } = {},
+  ): Promise<NotificationRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (range.from) {
+      clauses.push("n.sent_at >= ?");
+      params.push(range.from);
+    }
+    if (range.to) {
+      clauses.push("n.sent_at <= ?");
+      params.push(range.to);
+    }
+    if (range.kind) {
+      clauses.push("n.kind = ?");
+      params.push(range.kind);
+    }
+    if (range.status) {
+      clauses.push("n.status = ?");
+      params.push(range.status);
+    }
+    params.push(limit);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.db.all(
+      `SELECT n.*, p.name AS profile_name
+       FROM notification n
+       LEFT JOIN profile p ON p.id = n.profile_id
+       ${where}
+       ORDER BY n.id DESC
+       LIMIT ?`,
+      params,
+    );
+    return rows.map((row) => this.toNotification(row));
+  }
+
+  async claimHeartbeatIfDue(
+    intervalMinutes: number,
+    force = false,
+  ): Promise<boolean> {
+    await this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!force) {
+        const last = await this.db.get<{ timestamp: string }>(
+          "SELECT timestamp FROM heartbeat_notification ORDER BY id DESC LIMIT 1",
+        );
+        if (last) {
+          const elapsedMinutes = Math.floor(
+            (Date.now() - +new Date(last.timestamp)) / 60000,
+          );
+          if (elapsedMinutes < intervalMinutes) {
+            await this.db.exec("COMMIT");
+            return false;
+          }
+        }
+      }
+      await this.db.run(
+        "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
+        [null],
+      );
+      await this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      try {
+        await this.db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
+      }
+      throw error;
+    }
+  }
+
+  async getHeartbeatReport(): Promise<{
+    enabledProfiles: { name: string; visaProcessId: string }[];
+    recentRuns: { name: string; status: string; startedAt: string }[];
+    anySuccess: boolean;
+  }> {
+    const enabledProfiles = (await this.db.all(
+      "SELECT name, visa_process_id AS visaProcessId FROM profile WHERE enabled = 1 ORDER BY name",
+    )) as { name: string; visaProcessId: string }[];
+    const recentRuns = (await this.db.all(
+      `SELECT p.name, r.status, r.started_at AS startedAt
+       FROM run r
+       JOIN profile p ON p.id = r.profile_id
+       ORDER BY r.id DESC
+       LIMIT 5`,
+    )) as { name: string; status: string; startedAt: string }[];
+    return {
+      enabledProfiles,
+      recentRuns,
+      anySuccess: recentRuns.some((run) => run.status === "success"),
+    };
+  }
+
+  private async backfillNotifications(): Promise<void> {
+    if ((await this.getRawSetting("notification_backfill")) === "1") return;
+
+    await this.db.run(
+      `INSERT INTO notification
+         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
+       SELECT
+         COALESCE(r.finished_at, r.started_at),
+         'appointment',
+         'email',
+         'sent',
+         r.profile_id,
+         r.id,
+         COALESCE(p.email_destination, ''),
+         'Visa appointment available',
+         'Imported from a previous appointment email',
+         NULL
+       FROM run r
+       LEFT JOIN profile p ON p.id = r.profile_id
+       WHERE json_extract(r.result, '$.notified') = 1`,
+    );
+
+    await this.db.run(
+      `INSERT INTO notification
+         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
+       SELECT
+         timestamp,
+         'heartbeat',
+         'email',
+         'sent',
+         NULL,
+         NULL,
+         '',
+         'Visa appointment scheduler is running',
+         'Imported from a previous heartbeat',
+         NULL
+       FROM heartbeat_notification`,
+    );
+
+    await this.setRawSetting("notification_backfill", "1");
+  }
+
+  private toNotification(row: any): NotificationRecord {
+    const kind: NotificationKind =
+      row.kind === "heartbeat" || row.kind === "failure"
+        ? row.kind
+        : "appointment";
+    return {
+      id: row.id,
+      sentAt: row.sent_at,
+      kind,
+      channel: row.channel || "email",
+      status: row.status === "failed" ? "failed" : "sent",
+      profileId: row.profile_id ?? null,
+      profileName: row.profile_name ?? null,
+      runId: row.run_id ?? null,
+      recipients: row.recipients || "",
+      subject: row.subject || "",
+      summary: row.summary || "",
+      error: row.error ?? null,
+    };
   }
 }

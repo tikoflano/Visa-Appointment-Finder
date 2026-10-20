@@ -9,7 +9,7 @@ One long-running process serves a local admin UI, stores every account in SQLite
 ```
 ./run.sh
     └── Docker container visa-ui (restart unless-stopped)
-            └── node build/server/index.js     UI + scheduler
+            └── node build/server/index.js     UI + scheduler + notifier
                     ├── HTTP on port 3000
                     ├── SQLite (db.sqlite)
                     └── spawn node build/index.js   one Playwright check per due profile
@@ -19,14 +19,14 @@ One long-running process serves a local admin UI, stores every account in SQLite
 2. The management server listens on http://127.0.0.1:3000 (password-protected).
 3. About every 15 seconds the scheduler looks at **enabled** profiles.
 4. When a profile is due (the global check interval, default 5 minutes), or you click **Run now**, it starts `node build/index.js` **inside that same container**.
-5. That child logs into ais.usvisa-info.com, searches for dates, optionally emails and/or reschedules, prints one `VISA_RESULT` JSON line on stdout, then exits. Step-by-step debug messages are off unless Settings **Capture bot debug output** (or `--debug`) is on. The scheduler parses the JSON and stores it.
-6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a FIFO queue, **one slot per profile** (already running or queued profiles are not enqueued again). A run that exceeds **Run timeout** is killed.
+5. That child logs into ais.usvisa-info.com, reads the booked date, searches for matching dates, optionally reschedules if the profile has that action, prints one `VISA_RESULT` JSON line on stdout, then exits. It does not send mail. Step-by-step debug messages are off unless Settings **Capture bot debug output** (or `--debug`) is on. The scheduler parses the JSON, stores it, and asks the notifier to send mail.
+6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a FIFO queue, **one slot per profile** (already running or queued profiles are not enqueued again). A run that exceeds **Run timeout** is killed. The notifier sends appointment emails, heartbeats, and failure alarms from the server process — never from the Playwright child. Every send (and failed send) is stored in the notification log.
 
 A profile is due from the **start** of its last run, not the finish. A check that lasts longer than the interval will not pile up extra queue entries, but the next run starts as soon as it is idle and the interval since that start has elapsed.
 
 If a profile stays **running** or **queued** longer than **Check every**, the UI shows a queue-health warning and turns that profile’s running/queued badge orange.
 
-The child does not read env files. The scheduler decrypts the visa password and Gmail app password, then injects `VISA_*` / `GMAIL_*` / `EMAIL_*` into that process. The master key is not passed to children.
+The child does not read env files. The scheduler decrypts the visa password and injects `VISA_*` into that process. Gmail credentials stay in the server; the master key is not passed to children.
 
 **AIS** is the US visa site the bot logs into: [ais.usvisa-info.com](https://ais.usvisa-info.com) (Chile NIV).
 
@@ -102,7 +102,7 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
 | `./run.sh --rebuild --foreground` | Force-rebuild, then run attached. Flag order does not matter. |
-| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. Open **5173**, not the production UI on :3000. CSS and JS update in the browser without a refresh. Skips login and does not start the scheduler, so it will not double-run bots next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
+| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. Open **5173**, not the production UI on :3000. CSS and JS update in the browser without a refresh. Skips login and does not start the scheduler or notifier, so it will not double-run bots or send automatic mail next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
 | `./run.sh logs` | Follow `visa-ui` logs (`docker logs -f`). Ctrl+C only leaves the log stream; the container keeps running. |
 | `./run.sh stop` | Stop and remove `visa-ui`. Scheduled checks stop too. |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
@@ -155,26 +155,27 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and icon actions (run/stop, runs, edit, delete). Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last.
 
-- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, settings, sign out).
+- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, notifications, settings, sign out).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Enable is refused if the date window overlaps another enabled profile (notify included — two people should not hunt the same days). An empty latest date needs a stored booked appointment from a prior run, or set a latest date.
 - **Date window** — if latest is empty, the end of the window is the current booked date (dashed link, tooltip). That date can change after a check or reschedule.
 - **Run now / Stop** — start or cancel a check immediately.
 - **Next run** — last run **start** plus **Check every**. **due** means that time has already passed (or the profile has never run). Disabled profiles show —. `./run.sh dev` still shows this time but does not start scheduled checks.
 - **Result** — **none available** is a slate chip (checked, nothing matched), distinct from gray **never run**. **available** is clickable and lists matching dates. **error** / **failed** / **timeout** open a dialog with the error text (same details as expanding that run).
 - **Runs** — history for that profile. Opens on the **last 24 hours**. Filter by from/to datetime and **notified**; sort newest or oldest first. A line above the list shows first and last notification in that range. A green/red bar is the mix of succeeded vs errored checks. Click a row to expand booked appointment, dates, notified, rescheduled, and error text (the outcome badge is already on the row). The list is **not paginated**: 100 runs, or 500 when a filter is on (API cap 500). Older rows past that cap are omitted; SQLite still prunes runs after 14 days.
+- **Notifications** — admin log of every appointment email, heartbeat, and failure alarm the notifier sent (or failed to send). Opens on the **last 24 hours**. Filter by from/to, kind, and status. Click a row for recipients, summary, and error text. Existing appointment emails and heartbeats are imported once from older run/heartbeat rows.
 - **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, failure alarm (default 3 consecutive errors), bot debug output.
 
-**Notify** (orange badge) emails the profile’s recipients when a matching date exists. Those recipients are required if notify is on. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses.
+**Notify** (orange badge) emails the profile’s recipients when a matching date exists. Those recipients are required if notify is on. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses. The Playwright child only reports dates; the server notifier sends the mail after the check exits.
 
-If sending that appointment email fails, the whole check is stored as **error** (`notified` stays false), even when dates were found. Click the error badge for the SMTP/message. Automatic **heartbeat** and **failure alarm** send failures are only in the container logs; **Send now** for heartbeat shows the error on the Settings form.
+If sending that appointment email fails, the AIS result is still stored (`available` / dates / rescheduled stay as the bot reported) and `notified` stays false. The SMTP/message is on the run as **Error** (expand the row in **Runs**) and as a **failed** row in **Notifications**. Automatic **heartbeat** and **failure alarm** send failures are in that same log; **Send now** for heartbeat also shows the error on the Settings form.
 
 **Reschedule** (green badge) books the first matching date without asking.
 
-**Heartbeat** is a Settings toggle. The scheduler emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes), even if no profile ran or every run failed. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately. `./run.sh dev` turns the scheduler off, so automatic heartbeats, failure alarms, and scheduled checks do not fire there.
+**Heartbeat** is a Settings toggle. The notifier emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes), even if no profile ran or every run failed. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately. `./run.sh dev` turns the scheduler and notifier off, so automatic heartbeats, failure alarms, and scheduled checks do not fire there.
 
 **Failure alarm** emails those same admin addresses when one profile records that many errors in a row (default 3). Timeouts, interruptions, bot errors, and a failed appointment email count; a later successful check resets the streak. The email is sent once per streak, when the count first hits the threshold.
 
-**Bot debug** is off by default. A check only prints `VISA_RESULT` JSON (stdout) plus errors. Turn on **Capture bot debug output** in Settings when you are investigating a failure: the next scheduled or **Run now** checks pass `--debug`, keep step-by-step bot messages (login, home page, Playwright, …) on that run, and show them under the expanded result in **Runs**. Leave it off afterward. For a bot started by hand, `node build/index.js --debug` does the same for that process only.
+**Bot debug** is off by default. A check only prints `VISA_RESULT` JSON (stdout) plus errors. Turn on **Capture bot debug output** in Settings when you are investigating a failure: the next scheduled or **Run now** checks pass `--debug`, keep step-by-step bot messages (login, home page, Playwright, …) on that run, and show them under the expanded result in **Runs**. Leave it off afterward. For a bot started by hand, `node build/index.js --debug` does the same for that process only. Pass `--reschedule` only when the server (or you) wants that process to book the first match.
 
 To send mail you need a Gmail **App Password**:
 
@@ -197,6 +198,8 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 
 **run** — each scheduler/manual execution (status, structured `VISA_RESULT` JSON, timestamps, and debug output only if that was on). Old rows are pruned after 14 days.
 
+**notification** — each appointment, heartbeat, or failure-alarm email the notifier sent or failed to send (recipients, subject, summary, status).
+
 `HOST_BIND` / `PORT` / `COOKIE_SECURE` for `./run.sh` are listed under [`run.sh` commands](#runsh-commands). The Node process inside the container also understands:
 
 ## Environment variables
@@ -206,7 +209,7 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 | `VISA_MASTER_KEY_FILE` | `secrets/master.key` | 32-byte base64 master key |
 | `DB_PATH` | `./db.sqlite` | SQLite database |
 | `PUBLIC_DIR` | `build/ui` | Vite production build of the admin UI. `./run.sh dev` still points this at `public/` for the API process; the browser should use Vite on :5173 |
-| `VISA_DEV` | unset | Set `1` for `./run.sh dev`: skip login, do not start the scheduler. Refused unless `HOST` is localhost |
+| `VISA_DEV` | unset | Set `1` for `./run.sh dev`: skip login, do not start the scheduler or notifier. Refused unless `HOST` is localhost |
 | `HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address the Node server binds |
 | `PORT` | `3000` | Listen port inside the process (Docker / `npm start`) |
 | `API_PORT` | `3456` | `./run.sh dev` API port that Vite proxies to |

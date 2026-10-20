@@ -1,6 +1,6 @@
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
-import { Action, Config, ParsedConfig } from "../types";
+import { Config, ParsedConfig } from "../types";
 import { parseDateAsUtc } from "../utils/dateUtils";
 
 export function parseCliArgs(): Config {
@@ -12,12 +12,11 @@ export function parseCliArgs(): Config {
         describe: "Headless mode.",
         default: false,
       },
-      action: {
-        type: "array",
-        alias: "a",
-        choices: Object.values(Action),
-        describe: "What to do when an appointment is found.",
-        default: [] as Action[],
+      reschedule: {
+        type: "boolean",
+        describe:
+          "Book the first matching date. The server decides whether to pass this.",
+        default: false,
       },
       maxDate: {
         type: "string",
@@ -63,10 +62,9 @@ export function validateAndParseDates(config: Config): ParsedConfig {
 
   return {
     headless: config.headless,
-    action: config.action,
+    reschedule: config.reschedule,
     maxDate,
     minDate,
     debug: config.debug,
   };
 }
-

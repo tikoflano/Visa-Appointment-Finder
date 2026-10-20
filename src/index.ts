@@ -1,21 +1,16 @@
 import { parseCliArgs, validateAndParseDates } from "./config/cli";
-import { Action } from "./types";
 import {
   emptyBotResult,
   formatVisaResult,
   toIsoDate,
   type BotResult,
 } from "./botResult";
-import { EmailService } from "./services/EmailService";
-import { NotificationService } from "./services/NotificationService";
 import { BrowserService } from "./services/BrowserService";
 import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
 import { addDays, formatDate } from "./utils/dateUtils";
 
 (async () => {
-  const emailService = new EmailService();
-  const notificationService = new NotificationService(null, emailService);
   const browserService = new BrowserService();
   const result: BotResult = emptyBotResult();
 
@@ -85,23 +80,8 @@ import { addDays, formatDate } from "./utils/dateUtils";
     result.outcome = "available";
 
     const firstDate = possibleDates[0];
-    let extraDates = "";
-    if (possibleDates.length > 1) {
-      extraDates = possibleDates
-        .slice(1)
-        .map((d) => formatDate(d))
-        .join(" / ");
-    }
 
-    if (parsedConfig.action.includes(Action.Notify)) {
-      await notificationService.sendAppointmentNotification(
-        firstDate,
-        extraDates,
-      );
-      result.notified = true;
-    }
-
-    if (parsedConfig.action.includes(Action.Reschedule)) {
+    if (parsedConfig.reschedule) {
       await appointmentService.reschedule(firstDate);
       result.rescheduled = true;
       result.currentAppointment = toIsoDate(firstDate);

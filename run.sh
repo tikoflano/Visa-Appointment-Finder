@@ -177,7 +177,7 @@ if [ "${1:-}" = "dev" ]; then
   npx tsc
   echo "Dev UI (HMR): http://127.0.0.1:$vite_port"
   echo "API:          http://127.0.0.1:$api_port  (proxied by Vite)"
-  echo "Open the Vite URL above — not :3000. CSS and JS update in the browser without a refresh."
+  echo "Open the Vite URL above — not :$api_port or :3000. CSS and JS update in the browser without a refresh."
   echo "Login skipped, scheduler off. Production visa-ui on :3000 is left running."
   npx tsc --watch --preserveWatchOutput --pretty false &
   tsc_pid=$!

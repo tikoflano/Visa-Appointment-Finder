@@ -46,6 +46,10 @@
             <sl-icon-button id="new-profile" class="hero-action add" name="person-plus-fill" label="New profile"></sl-icon-button>
           </sl-tooltip>
           <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Notifications</span>
+            <sl-icon-button id="open-notifications" class="hero-action notifications" name="bell-fill" label="Notifications"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
             <span slot="content">Settings</span>
             <sl-icon-button id="open-settings" class="hero-action settings" name="gear-fill" label="Settings"></sl-icon-button>
           </sl-tooltip>
@@ -89,7 +93,7 @@
 
     <section id="app-view" hidden>
       <sl-alert id="dev-banner" variant="warning" hidden>
-        Dev mode: login is skipped and the scheduler is off. The Docker container on port 3000 is unchanged.
+        Dev mode: login is skipped and the scheduler and notifier are off. The Docker container on port 3000 is unchanged.
       </sl-alert>
       <sl-alert id="settings-warning" variant="warning" hidden>
         Gmail credentials are not configured, so notifications and heartbeats can't be sent. Open Settings to add them.
@@ -210,7 +214,7 @@
           <div class="check-row wide">
             <sl-checkbox name="heartbeatEnabled">Send heartbeat emails</sl-checkbox>
             <sl-tooltip placement="bottom">
-              <span slot="content">The scheduler emails the admin addresses at most once per heartbeat interval, even if no profile ran. The email lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
+              <span slot="content">Emails the admin addresses at most once per heartbeat interval, even if no profile ran. The email lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
               <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat emails"></sl-icon-button>
             </sl-tooltip>
           </div>
@@ -227,7 +231,7 @@
             <span slot="label" class="label-text">
               Heartbeat every (minutes)
               <sl-tooltip placement="bottom">
-                <span slot="content">Minimum minutes between scheduler heartbeat emails. Default 1440 (once a day).</span>
+                <span slot="content">Minimum minutes between heartbeat emails. Default 1440 (once a day).</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
               </sl-tooltip>
             </span>
@@ -307,6 +311,44 @@
       </div>
       <div class="runs-wrap">
         <table class="logs"><tbody data-runs></tbody></table>
+      </div>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="notifications-dialog" class="wide-dialog" label="Notifications">
+      <div class="runs-filters">
+        <sl-input id="notes-from" type="datetime-local" label="From" size="small"></sl-input>
+        <sl-input id="notes-to" type="datetime-local" label="To" size="small"></sl-input>
+      </div>
+      <div class="runs-filters">
+        <sl-select id="notes-kind" label="Kind" size="small" value="any" hoist>
+          <sl-option value="any">Any</sl-option>
+          <sl-option value="appointment">Appointment</sl-option>
+          <sl-option value="heartbeat">Heartbeat</sl-option>
+          <sl-option value="failure">Failure alarm</sl-option>
+        </sl-select>
+        <sl-select id="notes-status" label="Status" size="small" value="any" hoist>
+          <sl-option value="any">Any</sl-option>
+          <sl-option value="sent">Sent</sl-option>
+          <sl-option value="failed">Failed</sl-option>
+        </sl-select>
+        <sl-button id="notes-clear-filter" size="small" disabled>Clear</sl-button>
+      </div>
+      <div class="runs-wrap">
+        <table class="logs">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Kind</th>
+              <th>Profile</th>
+              <th>Subject</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody data-notifications></tbody>
+        </table>
       </div>
       <div slot="footer" class="dialog-actions">
         <sl-button data-close>Close</sl-button>

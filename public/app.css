@@ -146,6 +146,10 @@ h1 {
   color: #ffd56a;
 }
 
+.hero .toolbar sl-icon-button.notifications {
+  color: #f0c14b;
+}
+
 .hero .toolbar sl-icon-button.settings {
   color: #d7e4ff;
 }

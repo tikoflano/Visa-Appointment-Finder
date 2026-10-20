@@ -1,8 +1,8 @@
 import { ChildProcess, spawn } from "child_process";
 import path from "path";
 import { parseVisaResult } from "../botResult";
-import { maybeSendFailureAlarm } from "./failureAlarm";
-import { sendHeartbeat } from "./heartbeat";
+import { Action } from "../types";
+import { Notifier } from "./Notifier";
 import { Profile, RunStatus, Store } from "./Store";
 
 const TICK_MS = 15 * 1000;
@@ -27,15 +27,16 @@ export type ProfileState = "running" | "queued" | "idle";
 
 export class Scheduler {
   private readonly store: Store;
+  private readonly notifier: Notifier;
   private readonly active = new Map<number, ActiveRun>();
   private queue: { profileId: number; trigger: string; enqueuedAt: number }[] = [];
   private draining: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private lastPrune = 0;
-  private heartbeatInFlight = false;
 
-  constructor(store: Store) {
+  constructor(store: Store, notifier: Notifier) {
     this.store = store;
+    this.notifier = notifier;
   }
 
   async start(): Promise<void> {
@@ -146,19 +147,6 @@ export class Scheduler {
     } catch (error) {
       console.error("Scheduler tick failed:", error);
     }
-    void this.maybeHeartbeat();
-  }
-
-  private async maybeHeartbeat(): Promise<void> {
-    if (this.heartbeatInFlight) return;
-    this.heartbeatInFlight = true;
-    try {
-      await sendHeartbeat(this.store);
-    } catch (error) {
-      console.error("Heartbeat failed:", error);
-    } finally {
-      this.heartbeatInFlight = false;
-    }
   }
 
   // Serialized so concurrent callers can't exceed the concurrency limit while
@@ -188,7 +176,7 @@ export class Scheduler {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.finishRun(runId, "failed", null, `${message}\n`);
-      this.queueFailureAlarm(profileId, "failed", null);
+      this.notifier.queueFailureAlarm(profileId, "failed", null);
       return;
     }
 
@@ -225,7 +213,6 @@ export class Scheduler {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
-      this.active.delete(profileId);
 
       let status: RunStatus = exitCode === 0 ? "success" : "failed";
       if (run.cancelled) status = "cancelled";
@@ -237,18 +224,31 @@ export class Scheduler {
         status = "failed";
       }
 
+      let result = parsed;
       try {
-        await this.store.finishRun(runId, status, exitCode, output, parsed);
-        if (parsed?.currentAppointment) {
+        result = await this.notifier.notifyForRun(
+          profileId,
+          runId,
+          status,
+          parsed,
+        );
+      } catch (error) {
+        console.error(`Notification failed for profile ${profileId}:`, error);
+      }
+
+      try {
+        await this.store.finishRun(runId, status, exitCode, output, result);
+        if (result?.currentAppointment) {
           await this.store.setCurrentAppointmentDate(
             profileId,
-            parsed.currentAppointment,
+            result.currentAppointment,
           );
         }
-        this.queueFailureAlarm(profileId, status, parsed);
+        this.notifier.queueFailureAlarm(profileId, status, result);
       } catch (error) {
         console.error(`Failed to record run ${runId}:`, error);
       }
+      this.active.delete(profileId);
       this.drain();
     };
 
@@ -257,7 +257,6 @@ export class Scheduler {
   }
 
   private async buildEnv(profile: Profile): Promise<NodeJS.ProcessEnv> {
-    const settings = await this.store.getSettings();
     const env: NodeJS.ProcessEnv = {};
     for (const key of INHERITED_ENV) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -268,35 +267,19 @@ export class Scheduler {
       VISA_USER_EMAIL: profile.visaEmail,
       VISA_USER_PASSWORD: await this.store.getVisaPassword(profile.id),
       VISA_PROCESS_ID: profile.visaProcessId,
-      EMAIL_DESTINATION: profile.emailDestination,
-      EMAIL_ADMIN_DESTINATION: settings.emailAdminDestination,
-      GMAIL_APP_USER: settings.gmailUser,
-      GMAIL_APP_PASSWORD: await this.store.getGmailAppPassword(),
     };
   }
 
   private buildArgs(profile: Profile, debug: boolean): string[] {
     const args = [RUNNER_PATH, "--headless"];
-    for (const action of profile.actions) {
-      args.push(`--action=${action}`);
+    if (profile.actions.includes(Action.Reschedule)) {
+      args.push("--reschedule");
     }
     // The runner accepts YYYY-MM-DD as well as MM/DD/YYYY.
     if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
     if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
     if (debug) args.push("--debug");
     return args;
-  }
-
-  private queueFailureAlarm(
-    profileId: number,
-    status: RunStatus,
-    result: ReturnType<typeof parseVisaResult>,
-  ): void {
-    void maybeSendFailureAlarm(this.store, profileId, status, result).catch(
-      (error) => {
-        console.error(`Failure alarm failed for profile ${profileId}:`, error);
-      },
-    );
   }
 
   private signal(child: ChildProcess, signal: NodeJS.Signals): void {

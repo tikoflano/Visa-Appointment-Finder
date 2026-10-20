@@ -5,7 +5,7 @@ export enum Action {
 
 export interface Config {
   headless: boolean;
-  action: Action[];
+  reschedule: boolean;
   maxDate: string;
   minDate: string;
   debug: boolean;
@@ -13,9 +13,8 @@ export interface Config {
 
 export interface ParsedConfig {
   headless: boolean;
-  action: Action[];
+  reschedule: boolean;
   maxDate?: Date;
   minDate?: Date;
   debug: boolean;
 }
-

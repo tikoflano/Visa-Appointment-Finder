@@ -756,7 +756,7 @@ function resultDetail(run) {
   if (!result) {
     rows.push(["Status", run.status]);
   } else {
-    if (result.outcome === "error") rows.push(["Error", result.error || "Unknown error"]);
+    if (result.error) rows.push(["Error", result.error]);
     rows.push(["Booked appointment", formatDate(result.currentAppointment) || "—"]);
     if (result.dates?.length) {
       rows.push(["Dates", result.dates.map((iso) => formatDate(iso) || iso).join(", ")]);
@@ -970,6 +970,179 @@ runsOrder.addEventListener("sl-change", () => {
 runsClearFilter.addEventListener("click", () => {
   resetRunsFilters();
   loadRuns();
+});
+
+// ---- Notifications dialog ----
+
+const notesDialog = $("#notifications-dialog");
+const notesFrom = $("#notes-from");
+const notesTo = $("#notes-to");
+const notesKind = $("#notes-kind");
+const notesStatus = $("#notes-status");
+const notesClearFilter = $("#notes-clear-filter");
+let notesCache = [];
+let notesLoadGen = 0;
+let expandedNoteId = null;
+
+function notificationKindLabel(kind) {
+  if (kind === "heartbeat") return "heartbeat";
+  if (kind === "failure") return "failure alarm";
+  return "appointment";
+}
+
+function notificationKindBadge(kind) {
+  if (kind === "heartbeat") return badge("heartbeat", "info");
+  if (kind === "failure") return badge("failure", "bad");
+  return badge("appointment", "warn");
+}
+
+function notesFilterActive() {
+  return Boolean(
+    notesFrom.value ||
+      notesTo.value ||
+      notesKind.value !== "any" ||
+      notesStatus.value !== "any",
+  );
+}
+
+function updateNotesClearButton() {
+  notesClearFilter.disabled = !notesFilterActive();
+}
+
+function notificationDetail(note) {
+  const rows = [
+    ["When", formatTimestamp(note.sentAt) || "—"],
+    ["Kind", notificationKindLabel(note.kind)],
+    ["Status", note.status],
+    ["Profile", note.profileName || "—"],
+    ["Recipients", note.recipients || "—"],
+    ["Subject", note.subject || "—"],
+    ["Summary", note.summary || "—"],
+  ];
+  if (note.error) rows.push(["Error", note.error]);
+  return el(
+    "table",
+    { class: "run-result" },
+    ...rows.map(([label, value]) => el("tr", {}, el("th", {}, label), el("td", {}, value))),
+  );
+}
+
+function renderNotificationRows(emptyMessage) {
+  const body = $("[data-notifications]", notesDialog);
+  if (!notesCache.length) {
+    body.replaceChildren(
+      el(
+        "tr",
+        {},
+        el(
+          "td",
+          { class: "sub", colspan: "5" },
+          emptyMessage || (notesFilterActive() ? "No notifications in this range" : "No notifications yet"),
+        ),
+      ),
+    );
+    return;
+  }
+  const nodes = [];
+  for (const note of notesCache) {
+    const expanded = expandedNoteId === note.id;
+    nodes.push(
+      el(
+        "tr",
+        { class: expanded ? "clickable expanded" : "clickable", onclick: () => toggleNotification(note) },
+        el("td", { class: "mono nowrap" }, formatTimestamp(note.sentAt)),
+        el("td", {}, notificationKindBadge(note.kind)),
+        el("td", {}, note.profileName || el("span", { class: "hint" }, "—")),
+        el("td", {}, note.subject || "—"),
+        el("td", {}, badge(note.status, note.status === "sent" ? "ok" : "bad")),
+      ),
+    );
+    if (expanded) {
+      nodes.push(
+        el(
+          "tr",
+          { class: "run-detail" },
+          el("td", { colspan: "5" }, notificationDetail(note)),
+        ),
+      );
+    }
+  }
+  body.replaceChildren(...nodes);
+}
+
+async function loadNotifications() {
+  const from = localDateTimeToIso(notesFrom.value);
+  const to = localDateTimeToIso(notesTo.value, true);
+  if (from && to && from > to) {
+    notesCache = [];
+    renderNotificationRows("From must be before To");
+    return;
+  }
+  const params = new URLSearchParams({
+    limit: notesFilterActive() ? "500" : "100",
+  });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (notesKind.value !== "any") params.set("kind", notesKind.value);
+  if (notesStatus.value !== "any") params.set("status", notesStatus.value);
+  const gen = ++notesLoadGen;
+  try {
+    const data = await api("GET", `/api/notifications?${params}`);
+    if (gen !== notesLoadGen) return;
+    notesCache = data.notifications || [];
+    renderNotificationRows();
+  } catch (error) {
+    if (gen !== notesLoadGen) return;
+    notesCache = [];
+    renderNotificationRows(error.message);
+  }
+}
+
+function resetNotesFilters({ keepRange = false } = {}) {
+  if (!keepRange) {
+    notesFrom.value = "";
+    notesTo.value = "";
+  }
+  notesKind.value = "any";
+  notesStatus.value = "any";
+  updateNotesClearButton();
+}
+
+async function openNotifications() {
+  expandedNoteId = null;
+  const range = last24HoursRange();
+  notesFrom.value = range.from;
+  notesTo.value = range.to;
+  resetNotesFilters({ keepRange: true });
+  notesDialog.show();
+  await loadNotifications();
+}
+
+function toggleNotification(note) {
+  expandedNoteId = expandedNoteId === note.id ? null : note.id;
+  renderNotificationRows();
+}
+
+$("#open-notifications").addEventListener("click", () => openNotifications());
+notesFrom.addEventListener("sl-change", () => {
+  updateNotesClearButton();
+  loadNotifications();
+});
+notesTo.addEventListener("sl-change", () => {
+  updateNotesClearButton();
+  loadNotifications();
+});
+notesKind.addEventListener("sl-change", () => {
+  updateNotesClearButton();
+  loadNotifications();
+});
+notesStatus.addEventListener("sl-change", () => {
+  updateNotesClearButton();
+  loadNotifications();
+});
+notesClearFilter.addEventListener("click", () => {
+  resetNotesFilters();
+  loadNotifications();
 });
 
 for (const button of document.querySelectorAll("[data-close]")) {
