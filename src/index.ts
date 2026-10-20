@@ -1,34 +1,30 @@
 import { parseCliArgs, validateAndParseDates } from "./config/cli";
 import { Action } from "./types";
-import { DatabaseService } from "./services/DatabaseService";
+import {
+  emptyBotResult,
+  formatVisaResult,
+  toIsoDate,
+  type BotResult,
+} from "./botResult";
 import { EmailService } from "./services/EmailService";
 import { NotificationService } from "./services/NotificationService";
 import { BrowserService } from "./services/BrowserService";
 import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
 import { addDays, formatDate } from "./utils/dateUtils";
-import { openDatabase } from "./server/Store";
 
 (async () => {
-  const db = await openDatabase();
-
   const emailService = new EmailService();
-  const databaseService = new DatabaseService(db);
-  const notificationService = new NotificationService(
-    databaseService,
-    emailService,
-  );
+  const notificationService = new NotificationService(null, emailService);
   const browserService = new BrowserService();
-
-  let processCompletedSuccessfully = false;
-  let heartbeatEnabled = false;
+  const result: BotResult = emptyBotResult();
 
   try {
-    await databaseService.initialize();
-
     const config = parseCliArgs();
     const parsedConfig = validateAndParseDates(config);
-    heartbeatEnabled = parsedConfig.heartbeat;
+    console.log = parsedConfig.debug
+      ? (...args: unknown[]) => console.error(...args)
+      : () => {};
 
     await browserService.launch(parsedConfig.headless);
     const page = browserService.getPage();
@@ -40,8 +36,6 @@ import { openDatabase } from "./server/Store";
       throw Error("Missing credentials");
     }
 
-    await databaseService.log("Process started");
-
     const authenticator = new VisaAuthenticator(page);
     const appointmentService = new AppointmentService(page);
 
@@ -49,6 +43,9 @@ import { openDatabase } from "./server/Store";
 
     await appointmentService.waitForHomePage();
     await appointmentService.checkIfVisaProcessExists();
+
+    const booked = await appointmentService.getCurrentAppointmentDate();
+    result.currentAppointment = booked ? toIsoDate(booked) : null;
 
     // filterAppointments excludes maxDate, so a user-provided max date is
     // pushed one day forward to make it inclusive.
@@ -61,12 +58,12 @@ import { openDatabase } from "./server/Store";
         )}`,
       );
     } else {
-      maxDate = await appointmentService.getCurrentAppointmentDate();
-      if (!maxDate) {
+      if (!booked) {
         throw new Error(
           "No current appointment found and no max date provided",
         );
       }
+      maxDate = booked;
       console.log(`Searching for appointments before ${formatDate(maxDate)}`);
     }
 
@@ -76,33 +73,24 @@ import { openDatabase } from "./server/Store";
       parsedConfig.minDate,
       maxDate,
     );
+    result.dates = possibleDates.map(toIsoDate);
 
-    // Check if there is a date available
     if (!possibleDates.length) {
-      await databaseService.log("No appointment available");
-      processCompletedSuccessfully = true;
+      result.ok = true;
+      result.outcome = "none";
       return;
     }
 
+    result.ok = true;
+    result.outcome = "available";
+
     const firstDate = possibleDates[0];
-
-    await databaseService.log(
-      `Appointment available on ${formatDate(firstDate)}`,
-    );
-
     let extraDates = "";
     if (possibleDates.length > 1) {
       extraDates = possibleDates
         .slice(1)
         .map((d) => formatDate(d))
         .join(" / ");
-      await databaseService.log(`Other available appointments: ${extraDates}`);
-    }
-
-    if (!parsedConfig.action.length) {
-      await databaseService.log("No action taken");
-      processCompletedSuccessfully = true;
-      return;
     }
 
     if (parsedConfig.action.includes(Action.Notify)) {
@@ -110,35 +98,24 @@ import { openDatabase } from "./server/Store";
         firstDate,
         extraDates,
       );
+      result.notified = true;
     }
 
     if (parsedConfig.action.includes(Action.Reschedule)) {
       await appointmentService.reschedule(firstDate);
-      await databaseService.log(
-        `Rescheduling completed, the new appointment date is ${formatDate(
-          firstDate,
-        )}`,
-      );
+      result.rescheduled = true;
+      result.currentAppointment = toIsoDate(firstDate);
     }
-
-    processCompletedSuccessfully = true;
   } catch (error) {
-    let message = "Unknown Error";
-
-    if (error instanceof Error) {
-      message = error.message;
-    }
-
-    await databaseService.log(message, true);
+    result.ok = false;
+    result.outcome = "error";
+    result.error =
+      error instanceof Error && error.message
+        ? error.message
+        : "Unknown error";
     process.exitCode = 1;
   } finally {
-    // Send heartbeat notification if enabled and process completed successfully
-    if (heartbeatEnabled && processCompletedSuccessfully) {
-      await notificationService.sendHeartbeatNotification();
-    }
-
-    // Teardown
-    await databaseService.close();
+    process.stdout.write(formatVisaResult(result));
     await browserService.close();
   }
 })();

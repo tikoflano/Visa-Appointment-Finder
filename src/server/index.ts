@@ -242,16 +242,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "GET",
       pattern: /^\/api\/profiles$/,
       handler: async () => {
-        const [profiles, latestRuns, lastLogs] = await Promise.all([
+        const [profiles, latestRuns] = await Promise.all([
           store.listProfiles(),
           store.getLatestRuns(),
-          store.getLastLogMessages(),
         ]);
         return profiles.map((profile) => ({
           ...profile,
           state: scheduler.getState(profile.id),
           lastRun: latestRuns.get(profile.id) ?? null,
-          lastLog: lastLogs.get(profile.visaProcessId) ?? null,
         }));
       },
     },

@@ -11,11 +11,11 @@ function escapeHtml(value: string): string {
 }
 
 export class NotificationService {
-  private databaseService: DatabaseService;
+  private databaseService: DatabaseService | null;
   private emailService: EmailService;
 
   constructor(
-    databaseService: DatabaseService,
+    databaseService: DatabaseService | null,
     emailService: EmailService,
   ) {
     this.databaseService = databaseService;
@@ -34,8 +34,12 @@ export class NotificationService {
     if (!destination || !Number.isFinite(intervalMinutes)) {
       throw Error("HEARTBEAT_* environment variable missing");
     }
+    const databaseService = this.databaseService;
+    if (!databaseService) {
+      throw Error("Database is required to send a heartbeat");
+    }
 
-    const claimed = await this.databaseService.claimHeartbeatIfDue(
+    const claimed = await databaseService.claimHeartbeatIfDue(
       intervalMinutes,
       !!options.force,
     );
@@ -44,7 +48,7 @@ export class NotificationService {
       return false;
     }
 
-    const report = await this.databaseService.getHeartbeatReport();
+    const report = await databaseService.getHeartbeatReport();
     const healthy = report.anySuccess;
     const profileLines = report.enabledProfiles.length
       ? report.enabledProfiles
@@ -102,6 +106,5 @@ export class NotificationService {
         (extraDates ? `Other available appointments: ${extraDates}` : ""),
       destination ? adminDestination : undefined,
     );
-    await this.databaseService.log("Email notification sent");
   }
 }

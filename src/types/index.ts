@@ -8,7 +8,7 @@ export interface Config {
   action: Action[];
   maxDate: string;
   minDate: string;
-  heartbeat: boolean;
+  debug: boolean;
 }
 
 export interface ParsedConfig {
@@ -16,6 +16,6 @@ export interface ParsedConfig {
   action: Action[];
   maxDate?: Date;
   minDate?: Date;
-  heartbeat: boolean;
+  debug: boolean;
 }
 

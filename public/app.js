@@ -9,9 +9,6 @@ import "@shoelace-style/shoelace/dist/components/dialog/dialog.js";
 import "@shoelace-style/shoelace/dist/components/icon-button/icon-button.js";
 import "@shoelace-style/shoelace/dist/components/input/input.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
-import "@shoelace-style/shoelace/dist/components/tab/tab.js";
-import "@shoelace-style/shoelace/dist/components/tab-group/tab-group.js";
-import "@shoelace-style/shoelace/dist/components/tab-panel/tab-panel.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
 
@@ -74,8 +71,13 @@ function relativeTime(iso) {
 }
 
 function dateWindow(profile) {
-  if (!profile.minDate && !profile.maxDate) return "before booked";
-  return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate) || "booked"}`;
+  const booked = profile.currentAppointmentDate
+    ? formatDate(profile.currentAppointmentDate)
+    : "booked";
+  if (!profile.minDate && !profile.maxDate) {
+    return profile.currentAppointmentDate ? `before ${booked}` : "before booked";
+  }
+  return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate) || booked}`;
 }
 
 function badge(text, kind) {
@@ -202,11 +204,30 @@ async function refresh() {
   }
 }
 
+function outcomeLabel(outcome) {
+  if (outcome === "none") return "none available";
+  if (outcome === "available") return "available";
+  if (outcome === "error") return "error";
+  return outcome || "";
+}
+
 function runBadge(profile) {
   if (profile.state === "running") return badge("running", "info");
   if (profile.state === "queued") return badge("queued", "info");
   const run = profile.lastRun;
   if (!run) return badge("never run", "muted");
+  const outcome = run.result?.outcome;
+  if (outcome === "none") return badge("none available", "muted");
+  if (outcome === "available") {
+    const node = badge("available", "ok");
+    node.classList.add("clickable-badge");
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openAvailableDates(run.result.dates || []);
+    });
+    return node;
+  }
+  if (outcome === "error") return badge("error", "bad");
   const kind = run.status === "success" ? "ok" : run.status === "cancelled" ? "muted" : "bad";
   return badge(run.status, kind);
 }
@@ -256,13 +277,6 @@ function renderProfiles() {
         ),
         el(
           "td",
-          { class: "message" },
-          profile.lastLog
-            ? el("div", { class: "clamp", title: profile.lastLog.message }, profile.lastLog.message.split("\n")[0])
-            : el("span", { class: "sub" }, "—"),
-        ),
-        el(
-          "td",
           {},
           el(
             "div",
@@ -270,7 +284,7 @@ function renderProfiles() {
             busy
               ? el("sl-button", { size: "small", variant: "danger", onclick: () => cancelRun(profile) }, "Stop")
               : el("sl-button", { size: "small", onclick: () => runNow(profile) }, "Run now"),
-            el("sl-button", { size: "small", onclick: () => openLogs(profile) }, "Logs"),
+            el("sl-button", { size: "small", onclick: () => openRuns(profile) }, "Runs"),
             el("sl-button", { size: "small", onclick: () => openProfile(profile) }, "Edit"),
           ),
         ),
@@ -322,7 +336,7 @@ function openProfile(profile) {
 
   const values = profile || {
     actions: ["notify"],
-    enabled: true,
+    enabled: false,
   };
   for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate"]) {
     named(profileForm, field).value = values[field] ?? "";
@@ -427,6 +441,7 @@ $("#open-settings").addEventListener("click", async () => {
     ? "Leave empty to keep the stored password"
     : "Not set";
   named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
+  named(settingsForm, "botDebug").checked = !!settings.botDebug;
   $("#last-heartbeat").textContent = lastHeartbeatLabel(settings.lastHeartbeatAt);
   settingsDialog.show();
 });
@@ -465,6 +480,7 @@ settingsForm.addEventListener("submit", async (event) => {
       heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
       maxConcurrentRuns: Number(named(form, "maxConcurrentRuns").value),
       runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
+      botDebug: named(form, "botDebug").checked,
     });
     settingsDialog.hide();
     refresh();
@@ -473,37 +489,71 @@ settingsForm.addEventListener("submit", async (event) => {
   }
 });
 
-// ---- Logs dialog ----
+// ---- Runs dialog ----
 
-const logsDialog = $("#logs-dialog");
+const runsDialog = $("#runs-dialog");
+const datesDialog = $("#dates-dialog");
+let runsCache = [];
+let expandedRunId = null;
+let expandedRun = null;
 
-async function openLogs(profile) {
-  logsDialog.label = `Logs — ${profile.name}`;
-  $("[data-output]", logsDialog).hidden = true;
-  $("sl-tab-group", logsDialog).show("messages");
-  logsDialog.show();
-
-  const [messages, runs] = await Promise.all([
-    api("GET", `/api/profiles/${profile.id}/logs?limit=300`),
-    api("GET", `/api/profiles/${profile.id}/runs?limit=100`),
-  ]);
-
-  $("[data-messages]", logsDialog).replaceChildren(
-    ...messages.map((log) =>
-      el("tr", {}, el("td", { class: "mono nowrap" }, log.timestamp), el("td", {}, log.message)),
-    ),
+function openAvailableDates(dates) {
+  const items = (dates || []).map((iso) => el("li", {}, formatDate(iso) || iso));
+  $("[data-dates]", datesDialog).replaceChildren(
+    ...(items.length ? items : [el("li", { class: "sub" }, "No dates")]),
   );
-  if (!messages.length) {
-    $("[data-messages]", logsDialog).append(el("tr", {}, el("td", { class: "sub" }, "No messages yet")));
-  }
+  datesDialog.show();
+}
 
-  $("[data-runs]", logsDialog).replaceChildren(
-    ...runs.map((run) =>
+function runStatusBadge(run) {
+  const outcome = run.result?.outcome;
+  if (outcome) {
+    const kind = outcome === "available" ? "ok" : outcome === "error" ? "bad" : "muted";
+    return badge(outcomeLabel(outcome), kind);
+  }
+  const kind = run.status === "success" ? "ok" : run.status === "running" ? "info" : run.status === "cancelled" ? "muted" : "bad";
+  return badge(run.status, kind);
+}
+
+function resultDetail(run) {
+  const result = run.result;
+  const rows = [];
+  if (!result) {
+    rows.push(["Status", run.status]);
+  } else {
+    rows.push(["Outcome", outcomeLabel(result.outcome)]);
+    if (result.outcome === "error") rows.push(["Error", result.error || "Unknown error"]);
+    rows.push(["Booked appointment", formatDate(result.currentAppointment) || "—"]);
+    if (result.dates?.length) {
+      rows.push(["Dates", result.dates.map((iso) => formatDate(iso) || iso).join(", ")]);
+    }
+    rows.push(["Notified", result.notified ? "yes" : "no"]);
+    rows.push(["Rescheduled", result.rescheduled ? "yes" : "no"]);
+  }
+  const table = el(
+    "table",
+    { class: "run-result" },
+    ...rows.map(([label, value]) => el("tr", {}, el("th", {}, label), el("td", {}, value))),
+  );
+  if (!run.output) return table;
+  return [table, el("pre", { class: "run-debug" }, run.output)];
+}
+
+function renderRunRows() {
+  const body = $("[data-runs]", runsDialog);
+  if (!runsCache.length) {
+    body.replaceChildren(el("tr", {}, el("td", { class: "sub" }, "No runs yet")));
+    return;
+  }
+  const nodes = [];
+  for (const run of runsCache) {
+    const expanded = expandedRunId === run.id;
+    nodes.push(
       el(
         "tr",
-        { class: "clickable", onclick: () => showRunOutput(run.id) },
+        { class: expanded ? "clickable expanded" : "clickable", onclick: () => toggleRun(run) },
         el("td", { class: "mono nowrap" }, formatTimestamp(run.startedAt)),
-        el("td", {}, badge(run.status, run.status === "success" ? "ok" : run.status === "running" ? "info" : "bad")),
+        el("td", {}, runStatusBadge(run)),
         el("td", { class: "sub" }, run.trigger),
         el(
           "td",
@@ -511,20 +561,39 @@ async function openLogs(profile) {
           run.finishedAt ? `${Math.round((new Date(run.finishedAt) - new Date(run.startedAt)) / 1000)}s` : "",
         ),
       ),
-    ),
-  );
-  if (!runs.length) {
-    $("[data-runs]", logsDialog).append(el("tr", {}, el("td", { class: "sub" }, "No runs yet")));
+    );
+    if (expanded) {
+      nodes.push(
+        el(
+          "tr",
+          { class: "run-detail" },
+          el("td", { colspan: "4" }, resultDetail(expandedRun || run)),
+        ),
+      );
+    }
   }
+  body.replaceChildren(...nodes);
 }
 
-async function showRunOutput(runId) {
-  const run = await api("GET", `/api/runs/${runId}`);
-  const output = $("[data-output]", logsDialog);
-  output.textContent = run.output || "(no output)";
-  output.hidden = false;
-  $("sl-tab-group", logsDialog).show("runs");
-  output.scrollIntoView({ block: "nearest" });
+async function openRuns(profile) {
+  expandedRunId = null;
+  expandedRun = null;
+  runsDialog.label = `Runs — ${profile.name}`;
+  runsDialog.show();
+  runsCache = await api("GET", `/api/profiles/${profile.id}/runs?limit=100`);
+  renderRunRows();
+}
+
+async function toggleRun(run) {
+  if (expandedRunId === run.id) {
+    expandedRunId = null;
+    expandedRun = null;
+    renderRunRows();
+    return;
+  }
+  expandedRunId = run.id;
+  expandedRun = await api("GET", `/api/runs/${run.id}`);
+  renderRunRows();
 }
 
 for (const button of document.querySelectorAll("[data-close]")) {

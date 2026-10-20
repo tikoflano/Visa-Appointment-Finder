@@ -33,11 +33,9 @@ export function parseCliArgs(): Config {
           "If set, the appointment must be on or after this date. Format: MM/DD/YYYY",
         default: "",
       },
-      heartbeat: {
+      debug: {
         type: "boolean",
-        alias: "hb",
-        describe:
-          "Send a heartbeat after a successful run. Only for a bot started by hand; the UI scheduler sends heartbeats itself.",
+        describe: "Print step-by-step bot messages on stderr.",
         default: false,
       },
     })
@@ -68,7 +66,7 @@ export function validateAndParseDates(config: Config): ParsedConfig {
     action: config.action,
     maxDate,
     minDate,
-    heartbeat: config.heartbeat,
+    debug: config.debug,
   };
 }
 

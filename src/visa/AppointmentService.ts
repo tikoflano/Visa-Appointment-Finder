@@ -91,10 +91,6 @@ export class AppointmentService {
     const response = await this.page.waitForResponse(/appointment\/days/);
     const appointments: { date: string }[] = await response.json();
 
-    if (!appointments.length) {
-      throw Error("No appointments available");
-    }
-
     return appointments.map(({ date }) => new Date(date));
   }
 

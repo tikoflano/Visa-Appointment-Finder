@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from "child_process";
 import path from "path";
+import { parseVisaResult } from "../botResult";
 import { sendHeartbeat } from "./heartbeat";
 import { Profile, RunStatus, Store } from "./Store";
 
@@ -18,6 +19,7 @@ interface ActiveRun {
   runId: number;
   child: ChildProcess;
   cancelled: boolean;
+  debug: boolean;
 }
 
 export type ProfileState = "running" | "queued" | "idle";
@@ -151,8 +153,8 @@ export class Scheduler {
       return;
     }
 
-    const { runTimeoutMinutes } = await this.store.getSettings();
-    const child = spawn(process.execPath, this.buildArgs(profile), {
+    const { runTimeoutMinutes, botDebug } = await this.store.getSettings();
+    const child = spawn(process.execPath, this.buildArgs(profile, botDebug), {
       env,
       cwd: path.resolve(__dirname, "..", ".."),
       stdio: ["ignore", "pipe", "pipe"],
@@ -160,15 +162,17 @@ export class Scheduler {
       detached: true,
     });
 
-    const run: ActiveRun = { runId, child, cancelled: false };
+    const run: ActiveRun = { runId, child, cancelled: false, debug: botDebug };
     this.active.set(profileId, run);
 
-    let output = "";
-    const append = (chunk: Buffer) => {
-      output = (output + chunk.toString("utf8")).slice(-OUTPUT_BUFFER_LIMIT);
-    };
-    child.stdout!.on("data", append);
-    child.stderr!.on("data", append);
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.on("data", (chunk: Buffer) => {
+      stdout = (stdout + chunk.toString("utf8")).slice(-OUTPUT_BUFFER_LIMIT);
+    });
+    child.stderr!.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-OUTPUT_BUFFER_LIMIT);
+    });
 
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -188,8 +192,20 @@ export class Scheduler {
       if (run.cancelled) status = "cancelled";
       else if (timedOut) status = "timeout";
 
+      const output = (run.debug ? stderr : "") + extra;
+      const parsed = parseVisaResult(stdout);
+      if (parsed?.outcome === "error" && status === "success") {
+        status = "failed";
+      }
+
       try {
-        await this.store.finishRun(runId, status, exitCode, output + extra);
+        await this.store.finishRun(runId, status, exitCode, output, parsed);
+        if (parsed?.currentAppointment) {
+          await this.store.setCurrentAppointmentDate(
+            profileId,
+            parsed.currentAppointment,
+          );
+        }
       } catch (error) {
         console.error(`Failed to record run ${runId}:`, error);
       }
@@ -209,7 +225,6 @@ export class Scheduler {
 
     return {
       ...env,
-      DB_PATH: path.resolve(process.env.DB_PATH || "./db.sqlite"),
       VISA_USER_EMAIL: profile.visaEmail,
       VISA_USER_PASSWORD: await this.store.getVisaPassword(profile.id),
       VISA_PROCESS_ID: profile.visaProcessId,
@@ -220,7 +235,7 @@ export class Scheduler {
     };
   }
 
-  private buildArgs(profile: Profile): string[] {
+  private buildArgs(profile: Profile, debug: boolean): string[] {
     const args = [RUNNER_PATH, "--headless"];
     for (const action of profile.actions) {
       args.push(`--action=${action}`);
@@ -228,6 +243,7 @@ export class Scheduler {
     // The runner accepts YYYY-MM-DD as well as MM/DD/YYYY.
     if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
     if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
+    if (debug) args.push("--debug");
     return args;
   }
 

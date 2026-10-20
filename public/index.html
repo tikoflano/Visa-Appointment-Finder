@@ -64,7 +64,6 @@
             <th>Actions</th>
             <th>Result</th>
             <th>Last run</th>
-            <th>Last message</th>
             <th></th>
           </tr>
         </thead>
@@ -105,7 +104,7 @@
             <span slot="label" class="label-text">
               Latest date
               <sl-tooltip placement="bottom">
-                <span slot="content">Leave empty to search strictly before the appointment already booked on AIS. If there is no booked appointment, set a date or the run fails.</span>
+                <span slot="content">Leave empty to search strictly before the appointment already booked on AIS. A successful run stores that booked date. Empty latest needs that date (or a set date) before the profile can be enabled next to others.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About latest date"></sl-icon-button>
               </sl-tooltip>
             </span>
@@ -210,6 +209,13 @@
               </sl-tooltip>
             </span>
           </sl-input>
+          <div class="check-row wide">
+            <sl-checkbox name="botDebug">Capture bot debug output</sl-checkbox>
+            <sl-tooltip placement="bottom">
+              <span slot="content">When on, the next checks keep step-by-step bot messages on the run. Leave off unless you are investigating a failure.</span>
+              <sl-icon-button class="help-tip" name="question-circle" label="About bot debug output"></sl-icon-button>
+            </sl-tooltip>
+          </div>
         </div>
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
@@ -220,18 +226,15 @@
       </div>
     </sl-dialog>
 
-    <sl-dialog id="logs-dialog" class="wide-dialog" label="Logs">
-      <sl-tab-group>
-        <sl-tab slot="nav" panel="messages">Messages</sl-tab>
-        <sl-tab slot="nav" panel="runs">Runs</sl-tab>
-        <sl-tab-panel name="messages">
-          <table class="logs"><tbody data-messages></tbody></table>
-        </sl-tab-panel>
-        <sl-tab-panel name="runs">
-          <table class="logs"><tbody data-runs></tbody></table>
-          <pre data-output hidden></pre>
-        </sl-tab-panel>
-      </sl-tab-group>
+    <sl-dialog id="runs-dialog" class="wide-dialog" label="Runs">
+      <div class="runs-wrap">
+        <table class="logs"><tbody data-runs></tbody></table>
+      </div>
+      <sl-button slot="footer" data-close>Close</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dates-dialog" label="Available dates">
+      <ul class="date-list" data-dates></ul>
       <sl-button slot="footer" data-close>Close</sl-button>
     </sl-dialog>
 

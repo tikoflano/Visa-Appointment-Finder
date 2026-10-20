@@ -1,6 +1,12 @@
 import crypto from "crypto";
 import sqlite3 from "sqlite3";
 import { Database, open } from "sqlite";
+import {
+  BotResult,
+  normalizeBotResult,
+  profileSearchWindow,
+  windowsOverlap,
+} from "../botResult";
 import { Action } from "../types";
 import { DatabaseService } from "../services/DatabaseService";
 import { SecretBox } from "./SecretBox";
@@ -27,6 +33,7 @@ export interface ProfileInput {
 export interface Profile extends Omit<ProfileInput, "visaPassword"> {
   id: number;
   hasPassword: boolean;
+  currentAppointmentDate: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,6 +48,7 @@ export interface Settings {
   lastHeartbeatAt: string | null;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
+  botDebug: boolean;
 }
 
 export interface SettingsInput
@@ -64,6 +72,7 @@ export interface Run {
   exitCode: number | null;
   startedAt: string;
   finishedAt: string | null;
+  result: BotResult | null;
   output?: string;
 }
 
@@ -83,6 +92,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   heartbeat_minutes: "1440",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
+  bot_debug: "0",
 };
 
 const profileSecretContext = (id: number) => `profile:${id}:visa_password`;
@@ -126,6 +136,7 @@ export class Store {
         max_date TEXT,
         actions TEXT NOT NULL DEFAULT '',
         enabled INTEGER NOT NULL DEFAULT 0,
+        current_appointment_date TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -142,6 +153,7 @@ export class Store {
         status TEXT NOT NULL,
         exit_code INTEGER,
         output TEXT NOT NULL DEFAULT '',
+        result TEXT,
         started_at TEXT NOT NULL,
         finished_at TEXT
       );
@@ -169,6 +181,22 @@ export class Store {
         );
       }
       await this.db.exec("ALTER TABLE profile DROP COLUMN heartbeat");
+    }
+    if (
+      !profileColumns.some(
+        (column) => column.name === "current_appointment_date",
+      )
+    ) {
+      await this.db.exec(
+        "ALTER TABLE profile ADD COLUMN current_appointment_date TEXT",
+      );
+    }
+
+    const runColumns: { name: string }[] = await this.db.all(
+      "PRAGMA table_info(run)",
+    );
+    if (!runColumns.some((column) => column.name === "result")) {
+      await this.db.exec("ALTER TABLE run ADD COLUMN result TEXT");
     }
 
     await this.verifyMasterKey();
@@ -225,6 +253,7 @@ export class Store {
       lastHeartbeatAt: await this.getLastHeartbeatAt(),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
+      botDebug: (await this.getSetting("bot_debug")) === "1",
     };
   }
 
@@ -262,6 +291,7 @@ export class Store {
       "run_timeout_minutes",
       positiveInt(input.runTimeoutMinutes, "Run timeout"),
     );
+    await this.setRawSetting("bot_debug", input.botDebug ? "1" : "0");
     if (input.gmailAppPassword) {
       await this.setRawSetting(
         "gmail_app_password",
@@ -325,6 +355,7 @@ export class Store {
       maxDate: row.max_date,
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
       enabled: !!row.enabled,
+      currentAppointmentDate: row.current_appointment_date ?? null,
       hasPassword: !!row.visa_password_enc,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -405,8 +436,42 @@ export class Store {
     return this.box.decrypt(row.visa_password_enc, profileSecretContext(id));
   }
 
+  private async assertCanEnable(candidate: {
+    id?: number;
+    minDate: string | null;
+    maxDate: string | null;
+    currentAppointmentDate: string | null;
+  }): Promise<void> {
+    const window = profileSearchWindow(candidate);
+    if (window.kind === "unknown") {
+      throw new ValidationError(
+        "Run this profile once first so we know the booked appointment date, or set a latest date.",
+      );
+    }
+    const others = (await this.listProfiles()).filter(
+      (profile) => profile.enabled && profile.id !== candidate.id,
+    );
+    const names: string[] = [];
+    for (const other of others) {
+      const otherWindow = profileSearchWindow(other);
+      if (otherWindow.kind === "unknown") continue;
+      if (windowsOverlap(window, otherWindow)) names.push(other.name);
+    }
+    if (names.length) {
+      throw new ValidationError(
+        `Date window overlaps enabled profile${names.length > 1 ? "s" : ""} ${names.join(", ")}.`,
+      );
+    }
+  }
+
   async createProfile(rawInput: ProfileInput): Promise<Profile> {
     const input = this.validateProfile(rawInput, true);
+    if (input.enabled) {
+      await this.assertCanEnable({
+        ...input,
+        currentAppointmentDate: null,
+      });
+    }
     const now = new Date().toISOString();
 
     let id: number;
@@ -448,10 +513,19 @@ export class Store {
   }
 
   async updateProfile(id: number, rawInput: ProfileInput): Promise<Profile> {
-    if (!(await this.getProfile(id))) {
+    const existing = await this.getProfile(id);
+    if (!existing) {
       throw new ValidationError("Profile not found");
     }
     const input = this.validateProfile(rawInput, false);
+    if (input.enabled) {
+      await this.assertCanEnable({
+        id,
+        minDate: input.minDate,
+        maxDate: input.maxDate,
+        currentAppointmentDate: existing.currentAppointmentDate,
+      });
+    }
 
     try {
       await this.db.run(
@@ -486,9 +560,24 @@ export class Store {
   }
 
   async setProfileEnabled(id: number, enabled: boolean): Promise<void> {
+    if (enabled) {
+      const profile = await this.getProfile(id);
+      if (!profile) throw new ValidationError("Profile not found");
+      await this.assertCanEnable(profile);
+    }
     await this.db.run(
       "UPDATE profile SET enabled = ?, updated_at = ? WHERE id = ?",
       [enabled ? 1 : 0, new Date().toISOString(), id],
+    );
+  }
+
+  async setCurrentAppointmentDate(
+    id: number,
+    date: string | null,
+  ): Promise<void> {
+    await this.db.run(
+      "UPDATE profile SET current_appointment_date = ?, updated_at = ? WHERE id = ?",
+      [date, new Date().toISOString(), id],
     );
   }
 
@@ -524,13 +613,15 @@ export class Store {
     status: RunStatus,
     exitCode: number | null,
     output: string,
+    result: BotResult | null = null,
   ): Promise<void> {
     await this.db.run(
-      "UPDATE run SET status = ?, exit_code = ?, output = ?, finished_at = ? WHERE id = ?",
+      "UPDATE run SET status = ?, exit_code = ?, output = ?, result = ?, finished_at = ? WHERE id = ?",
       [
         status,
         exitCode,
         output.slice(-RUN_OUTPUT_LIMIT),
+        result ? JSON.stringify(result) : null,
         new Date().toISOString(),
         runId,
       ],
@@ -574,6 +665,14 @@ export class Store {
   }
 
   private toRun(row: any, withOutput = false): Run {
+    let result: BotResult | null = null;
+    if (row.result) {
+      try {
+        result = normalizeBotResult(JSON.parse(row.result));
+      } catch {
+        result = null;
+      }
+    }
     return {
       id: row.id,
       profileId: row.profile_id,
@@ -582,8 +681,16 @@ export class Store {
       exitCode: row.exit_code,
       startedAt: row.started_at,
       finishedAt: row.finished_at,
+      result,
       ...(withOutput ? { output: row.output } : {}),
     };
+  }
+
+  async appendLog(processId: string, message: string): Promise<void> {
+    await this.db.run("INSERT INTO log (visa_process_id, message) VALUES (?, ?)", [
+      processId,
+      message,
+    ]);
   }
 
   async getLastLogMessages(): Promise<
