@@ -69,7 +69,7 @@ function setError(form, message) {
 async function boot() {
   const session = await api("GET", "/api/session");
   if (session.authenticated) {
-    showApp();
+    showApp(session.dev);
   } else {
     showLogin(session.setupRequired);
   }
@@ -89,9 +89,10 @@ function showLogin(setupRequired) {
   confirm.required = setupMode;
 }
 
-function showApp() {
+function showApp(dev) {
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
+  $("#dev-banner").hidden = !dev;
   refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
@@ -171,8 +172,8 @@ function renderProfiles() {
           }),
         ),
         el("td", {}, el("strong", {}, profile.name), el("div", { class: "sub" }, profile.visaEmail)),
-        el("td", { class: "mono" }, profile.visaProcessId),
-        el("td", {}, window),
+        el("td", { class: "mono nowrap" }, profile.visaProcessId),
+        el("td", { class: "nowrap" }, window),
         el(
           "td",
           {},
@@ -206,12 +207,16 @@ function renderProfiles() {
         ),
         el(
           "td",
-          { class: "row-actions" },
-          busy
-            ? el("button", { onclick: () => cancelRun(profile) }, "Stop")
-            : el("button", { onclick: () => runNow(profile) }, "Run now"),
-          el("button", { onclick: () => openLogs(profile) }, "Logs"),
-          el("button", { onclick: () => openProfile(profile) }, "Edit"),
+          {},
+          el(
+            "div",
+            { class: "row-actions" },
+            busy
+              ? el("button", { onclick: () => cancelRun(profile) }, "Stop")
+              : el("button", { onclick: () => runNow(profile) }, "Run now"),
+            el("button", { onclick: () => openLogs(profile) }, "Logs"),
+            el("button", { onclick: () => openProfile(profile) }, "Edit"),
+          ),
         ),
       );
     }),

@@ -12,8 +12,12 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 100 * 1024;
 const LOGIN_LOCKOUT_THRESHOLD = 10;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+const DEV =
+  process.env.VISA_DEV === "1" || process.env.VISA_DEV === "true";
 
-const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
+const PUBLIC_DIR = path.resolve(
+  process.env.PUBLIC_DIR || path.join(__dirname, "..", "..", "public"),
+);
 const STATIC_FILES: Record<string, [string, string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
@@ -145,8 +149,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       pattern: /^\/api\/session$/,
       public: true,
       handler: async ({ req }) => ({
-        authenticated: sessions.isValid(getCookie(req, "sid")),
-        setupRequired: !(await store.hasAdminPassword()),
+        authenticated: DEV || sessions.isValid(getCookie(req, "sid")),
+        setupRequired: !DEV && !(await store.hasAdminPassword()),
+        dev: DEV,
       }),
     },
     {
@@ -329,7 +334,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       });
       if (!route) throw new HttpError(404, "Not found");
 
-      if (!route.public && !sessions.isValid(getCookie(req, "sid"))) {
+      if (!route.public && !DEV && !sessions.isValid(getCookie(req, "sid"))) {
         throw new HttpError(401, "Not authenticated");
       }
 
@@ -356,7 +361,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     }
   });
 
-  await scheduler.start();
+  if (DEV) {
+    if (HOST !== "127.0.0.1" && HOST !== "localhost") {
+      throw Error("VISA_DEV is only allowed when HOST is 127.0.0.1");
+    }
+    console.warn(
+      `Dev mode on http://${HOST}:${PORT} — login skipped, scheduler off`,
+    );
+  } else {
+    await scheduler.start();
+  }
   server.listen(PORT, HOST, () => {
     console.log(`Management UI listening on http://${HOST}:${PORT}`);
   });

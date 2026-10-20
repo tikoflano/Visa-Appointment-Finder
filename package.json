@@ -7,6 +7,7 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "start": "node build/server/index.js",
+    "dev": "./run.sh dev",
     "cli": "node build/server/cli.js"
   },
   "keywords": [],
@@ -17,7 +18,8 @@
     "@types/nodemailer": "^6.4.9",
     "@types/yargs": "^17.0.24",
     "prettier": "^3.0.0",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "vite": "^5.4.21"
   },
   "dependencies": {
     "nodemailer": "^6.9.4",

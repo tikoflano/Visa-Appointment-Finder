@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Visa Appointment Finder</title>
     <link rel="stylesheet" href="/app.css" />
-    <script src="/app.js" defer></script>
+    <script type="module" src="/app.js"></script>
   </head>
   <body>
     <section id="login-view" hidden>
@@ -37,6 +37,9 @@
         </div>
       </header>
 
+      <p id="dev-banner" class="banner" hidden>
+        Dev mode: login is skipped and the scheduler is off. The Docker container on port 3000 is unchanged.
+      </p>
       <p id="settings-warning" class="banner" hidden>
         Gmail credentials are not configured, so notifications and heartbeats can't be sent.
         Open <strong>Settings</strong> to add them.

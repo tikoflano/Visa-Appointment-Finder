@@ -45,11 +45,11 @@ header {
 .row-actions {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 
 .row-actions {
-  flex-wrap: wrap;
-  min-width: 10rem;
+  flex-wrap: nowrap;
 }
 
 button {
@@ -168,6 +168,7 @@ table {
 
 table.profiles {
   background: var(--card);
+  min-width: 72rem;
 }
 
 th,
@@ -175,7 +176,7 @@ td {
   text-align: left;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 th {
@@ -186,20 +187,14 @@ th {
   background: #fafbfc;
 }
 
-tr.disabled td:not(:first-child) {
+tr.disabled td:not(:first-child):not(:last-child) {
   opacity: 0.55;
 }
 
 table.profiles th:last-child,
 table.profiles td:last-child {
-  position: sticky;
-  right: 0;
-  background: var(--card);
-  box-shadow: -8px 0 8px -8px rgba(20, 24, 35, 0.18);
-}
-
-table.profiles thead th:last-child {
-  background: #fafbfc;
+  width: 1%;
+  white-space: nowrap;
 }
 
 td.message {
@@ -224,6 +219,7 @@ td.message {
   border-radius: 999px;
   font-size: 12px;
   border: 1px solid currentColor;
+  white-space: nowrap;
 }
 
 .badge.ok { color: var(--ok); }

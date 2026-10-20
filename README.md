@@ -87,13 +87,16 @@ Then open http://127.0.0.1:3000.
 
 The container is named `visa-ui`. Detached mode sets Docker’s restart policy to `unless-stopped`, so the container comes back after a reboot until you `./run.sh stop`. That policy is not a `run.sh` flag; use `./run.sh restart` to recreate a running container now.
 
+Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuild`, `--foreground`) only modify the default Docker start.
+
 | Command | What it does |
 | --- | --- |
 | `./run.sh` | Start `visa-ui` in the background. Rebuilds the image if source changed. If the container is already running and the image did not change, prints the URL and exits. |
-| `./run.sh restart` | Recreate `visa-ui` even if it is already running. Rebuilds the image only if source changed. `--restart` is the same. |
+| `./run.sh restart` | Recreate `visa-ui` even if it is already running. Rebuilds the image only if source changed. |
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
 | `./run.sh --rebuild --foreground` | Force-rebuild, then run attached. Flag order does not matter. |
+| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. No Docker rebuild. CSS updates in place; JS/HTML reload the page. Skips login and does not start the scheduler, so it will not double-run bots next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
 | `./run.sh logs` | Follow `visa-ui` logs (`docker logs -f`). Ctrl+C only leaves the log stream; the container keeps running. |
 | `./run.sh stop` | Stop and remove `visa-ui`. Scheduled checks stop too. |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
@@ -116,6 +119,7 @@ Examples:
 ```sh
 ./run.sh
 ./run.sh restart
+./run.sh dev
 ./run.sh logs
 HOST_BIND=0.0.0.0 PORT=8080 ./run.sh
 COOKIE_SECURE=true HOST_BIND=0.0.0.0 ./run.sh
@@ -132,9 +136,9 @@ Included in the hash:
 - `.dockerignore`
 - `package.json`, `package-lock.json`
 - `tsconfig.json`
-- everything under `src/` and `public/`
+- everything under `src/`
 
-Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. Changing the README does not rebuild.
+Not included: `public/` (HTML/CSS/JS are served from the bind-mounted project dir, so a refresh is enough), `README.md`, `db.sqlite`, `secrets/`, and other host-only files. Changing the README or UI files does not rebuild.
 
 `--rebuild` ignores the hash and always builds. The first start after this hashing was added will rebuild once, because older images have no `visa.source_hash` label.
 
@@ -189,8 +193,12 @@ sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"
 | --- | --- | --- |
 | `VISA_MASTER_KEY_FILE` | `secrets/master.key` | 32-byte base64 master key |
 | `DB_PATH` | `./db.sqlite` | SQLite database |
+| `PUBLIC_DIR` | `public/` next to `build/` | Directory of HTML/CSS/JS. Docker sets this to the bind-mounted project `public/` |
+| `VISA_DEV` | unset | Set `1` for `./run.sh dev`: skip login, do not start the scheduler. Refused unless `HOST` is localhost |
 | `HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address the Node server binds |
-| `PORT` | `3000` | Listen port inside the process |
+| `PORT` | `3000` | Listen port inside the process (Docker / `npm start`) |
+| `API_PORT` | `3456` | `./run.sh dev` API port that Vite proxies to |
+| `VITE_DEV_PORT` | `5173` | `./run.sh dev` Vite UI port (open this in the browser) |
 | `HOST_BIND` | `127.0.0.1` | Address Docker publishes on the host |
 | `COOKIE_SECURE` | unset | Set `true` behind HTTPS |
 
@@ -200,6 +208,7 @@ sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"
 | --- | --- |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm start` | Run the management server (needs key + DB) |
+| `npm run dev` | Same as `./run.sh dev` |
 | `npm run cli -- dump` | Same as `./run.sh dump` |
 | `npm run cli -- set-password` | Same as `./run.sh set-password` |
 | `npm run cli -- generate-key` | Create `secrets/master.key` if it does not exist |

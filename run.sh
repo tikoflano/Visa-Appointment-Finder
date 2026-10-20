@@ -22,10 +22,10 @@ Start (default):
   ./run.sh                 Start visa-ui detached (rebuild if source changed)
   --rebuild                Force-rebuild the image
   --foreground             Run attached to this terminal
-  --restart                Recreate the container even if it is already running
 
 Commands:
-  restart                  Same as --restart
+  dev                      Vite HMR UI + host API. No Docker, no login, no scheduler
+  restart                  Recreate visa-ui even if it is already running
   stop                     Stop and remove visa-ui
   logs                     Follow container logs
   dump                     Print decrypted settings and profiles (host Node)
@@ -68,7 +68,7 @@ source_hash() {
           sha256sum "$f"
         fi
       done
-      find src public -type f -print0 | sort -z | xargs -0 sha256sum
+      find src -type f -print0 | sort -z | xargs -0 sha256sum
     } | sha256sum | awk '{print $1}'
   )
 }
@@ -117,6 +117,7 @@ docker_base=(
   -e "TZ=$(cat /etc/timezone 2>/dev/null || echo UTC)"
   -e HOST=0.0.0.0
   -e PORT=3000
+  -e "PUBLIC_DIR=$CONTAINER_HOST/public"
   -e "COOKIE_SECURE=${COOKIE_SECURE:-}"
   --shm-size=1g
   -p "$HOST_BIND:$PORT:3000"
@@ -154,6 +155,51 @@ fi
 
 if [ "${1:-}" = "logs" ]; then
   exec docker logs -f "$CONTAINER_NAME"
+fi
+
+if [ "${1:-}" = "dev" ]; then
+  if [ ! -d "$BASE_DIR/node_modules" ]; then
+    echo "node_modules missing. Run: npm install"
+    exit 1
+  fi
+  api_port="${API_PORT:-3456}"
+  vite_port="${VITE_DEV_PORT:-5173}"
+  export VISA_MASTER_KEY_FILE="$KEY_FILE"
+  export DB_PATH="$DB_FILE"
+  export HOST=127.0.0.1
+  export PORT="$api_port"
+  export VISA_DEV=1
+  export PUBLIC_DIR="$BASE_DIR/public"
+  export VITE_API_PORT="$api_port"
+  export VITE_DEV_PORT="$vite_port"
+  cd "$BASE_DIR"
+  npx tsc
+  echo "Dev UI (HMR): http://127.0.0.1:$vite_port"
+  echo "API:          http://127.0.0.1:$api_port  (proxied by Vite)"
+  echo "CSS hot-reloads. JS/HTML reload the page. TypeScript restarts the API process."
+  echo "Login skipped, scheduler off. Production visa-ui on :3000 is left running."
+  npx tsc --watch --preserveWatchOutput --pretty false &
+  tsc_pid=$!
+  node --watch build/server/index.js &
+  node_pid=$!
+  trap 'kill "$tsc_pid" "$node_pid" 2>/dev/null || true' EXIT INT TERM
+  for i in $(seq 1 50); do
+    if curl -sf "http://127.0.0.1:$api_port/api/session" >/dev/null; then
+      break
+    fi
+    if [ "$i" -eq 50 ]; then
+      echo "API did not start on port $api_port"
+      exit 1
+    fi
+    sleep 0.1
+  done
+  # Unset PORT so Vite does not bind the API port. Preload a crypto
+  # polyfill: Vite default-imports node:crypto and crashes when
+  # getRandomValues is missing on that export.
+  env -u PORT node --require "$BASE_DIR/scripts/polyfill-crypto.cjs" \
+    "$BASE_DIR/node_modules/vite/bin/vite.js" \
+    --port "$vite_port" --host 127.0.0.1 --clearScreen false
+  exit 0
 fi
 
 foreground=0
