@@ -204,6 +204,7 @@ export class Scheduler {
       GMAIL_APP_PASSWORD: await this.store.getGmailAppPassword(),
       HEARTBEAT_TIME: String(settings.heartbeatMinutes),
       HEARTBEAT_DESTINATION: settings.emailAdminDestination,
+      HEARTBEAT_ENABLED: settings.heartbeatEnabled ? "1" : "0",
     };
   }
 
@@ -217,7 +218,11 @@ export class Scheduler {
     if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
     // The runner throws when heartbeat is requested without a destination,
     // which would turn every successful run into a failure.
-    if (profile.heartbeat && env.HEARTBEAT_DESTINATION && env.GMAIL_APP_USER) {
+    if (
+      env.HEARTBEAT_ENABLED === "1" &&
+      env.HEARTBEAT_DESTINATION &&
+      env.GMAIL_APP_USER
+    ) {
       args.push("--heartbeat");
     }
     return args;

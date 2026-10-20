@@ -201,8 +201,13 @@ sl-dialog.wide-dialog::part(panel) {
   width: 100%;
 }
 
-.grid .wide {
+.grid .wide,
+.grid .check-row.wide {
   grid-column: 1 / -1;
+}
+
+.heartbeat-status {
+  justify-content: space-between;
 }
 
 fieldset {

@@ -2,6 +2,9 @@ import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import { DatabaseService } from "../services/DatabaseService";
+import { EmailService } from "../services/EmailService";
+import { NotificationService } from "../services/NotificationService";
 import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
 import { openDatabase, Store, ValidationError } from "./Store";
@@ -337,6 +340,35 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "PUT",
       pattern: /^\/api\/settings$/,
       handler: async ({ body }) => store.updateSettings(body),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/heartbeat$/,
+      handler: async () => {
+        const settings = await store.getSettings();
+        if (!settings.emailAdminDestination) {
+          throw new ValidationError("Admin notification emails are required");
+        }
+        if (!settings.gmailUser || !settings.hasGmailAppPassword) {
+          throw new ValidationError("Gmail credentials are not configured");
+        }
+        const notify = new NotificationService(
+          new DatabaseService(store.db),
+          new EmailService({
+            user: settings.gmailUser,
+            pass: await store.getGmailAppPassword(),
+          }),
+        );
+        await notify.sendHeartbeatNotification({
+          force: true,
+          destination: settings.emailAdminDestination,
+          intervalMinutes: settings.heartbeatMinutes,
+        });
+        return {
+          sent: true,
+          lastHeartbeatAt: await store.getLastHeartbeatAt(),
+        };
+      },
     },
   ];
 

@@ -21,7 +21,6 @@ export interface ProfileInput {
   minDate: string | null;
   maxDate: string | null;
   actions: Action[];
-  heartbeat: boolean;
   enabled: boolean;
 }
 
@@ -37,13 +36,15 @@ export interface Settings {
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
   intervalMinutes: number;
+  heartbeatEnabled: boolean;
   heartbeatMinutes: number;
+  lastHeartbeatAt: string | null;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
 }
 
 export interface SettingsInput
-  extends Omit<Settings, "hasGmailAppPassword"> {
+  extends Omit<Settings, "hasGmailAppPassword" | "lastHeartbeatAt"> {
   gmailAppPassword?: string;
 }
 
@@ -78,6 +79,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
   interval_minutes: "5",
+  heartbeat_enabled: "1",
   heartbeat_minutes: "1440",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
@@ -123,7 +125,6 @@ export class Store {
         min_date TEXT,
         max_date TEXT,
         actions TEXT NOT NULL DEFAULT '',
-        heartbeat INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -156,6 +157,18 @@ export class Store {
     );
     if (profileColumns.some((column) => column.name === "interval_minutes")) {
       await this.db.exec("ALTER TABLE profile DROP COLUMN interval_minutes");
+    }
+    if (profileColumns.some((column) => column.name === "heartbeat")) {
+      if (!(await this.getRawSetting("heartbeat_enabled"))) {
+        const counts = await this.db.get<{ n: number; enabled_count: number }>(
+          "SELECT COUNT(*) AS n, COALESCE(SUM(heartbeat), 0) AS enabled_count FROM profile",
+        );
+        await this.setRawSetting(
+          "heartbeat_enabled",
+          !counts?.n || Number(counts.enabled_count) > 0 ? "1" : "0",
+        );
+      }
+      await this.db.exec("ALTER TABLE profile DROP COLUMN heartbeat");
     }
 
     await this.verifyMasterKey();
@@ -207,7 +220,9 @@ export class Store {
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
       intervalMinutes: Number(await this.getSetting("interval_minutes")),
+      heartbeatEnabled: (await this.getSetting("heartbeat_enabled")) === "1",
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
+      lastHeartbeatAt: await this.getLastHeartbeatAt(),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
     };
@@ -232,6 +247,10 @@ export class Store {
       positiveInt(input.intervalMinutes, "Check interval"),
     );
     await this.setRawSetting(
+      "heartbeat_enabled",
+      input.heartbeatEnabled ? "1" : "0",
+    );
+    await this.setRawSetting(
       "heartbeat_minutes",
       positiveInt(input.heartbeatMinutes, "Heartbeat interval"),
     );
@@ -250,6 +269,13 @@ export class Store {
       );
     }
     return this.getSettings();
+  }
+
+  async getLastHeartbeatAt(): Promise<string | null> {
+    const row = await this.db.get<{ timestamp: string }>(
+      "SELECT timestamp FROM heartbeat_notification ORDER BY id DESC LIMIT 1",
+    );
+    return row?.timestamp ?? null;
   }
 
   async getGmailAppPassword(): Promise<string> {
@@ -298,7 +324,6 @@ export class Store {
       minDate: row.min_date,
       maxDate: row.max_date,
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
-      heartbeat: !!row.heartbeat,
       enabled: !!row.enabled,
       hasPassword: !!row.visa_password_enc,
       createdAt: row.created_at,
@@ -349,7 +374,6 @@ export class Store {
       minDate,
       maxDate,
       actions,
-      heartbeat: !!input.heartbeat,
       enabled: !!input.enabled,
     };
   }
@@ -389,8 +413,8 @@ export class Store {
     try {
       const result = await this.db.run(
         `INSERT INTO profile (name, visa_email, visa_password_enc, visa_process_id, email_destination,
-           min_date, max_date, actions, heartbeat, enabled, created_at, updated_at)
-         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           min_date, max_date, actions, enabled, created_at, updated_at)
+         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.name,
           input.visaEmail,
@@ -399,7 +423,6 @@ export class Store {
           input.minDate,
           input.maxDate,
           input.actions.join(","),
-          input.heartbeat ? 1 : 0,
           input.enabled ? 1 : 0,
           now,
           now,
@@ -433,7 +456,7 @@ export class Store {
     try {
       await this.db.run(
         `UPDATE profile SET name = ?, visa_email = ?, visa_process_id = ?, email_destination = ?,
-           min_date = ?, max_date = ?, actions = ?, heartbeat = ?, enabled = ?,
+           min_date = ?, max_date = ?, actions = ?, enabled = ?,
            updated_at = ?
          WHERE id = ?`,
         [
@@ -444,7 +467,6 @@ export class Store {
           input.minDate,
           input.maxDate,
           input.actions.join(","),
-          input.heartbeat ? 1 : 0,
           input.enabled ? 1 : 0,
           new Date().toISOString(),
           id,

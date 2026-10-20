@@ -13,14 +13,16 @@ function parseAddressList(value?: string): string | string[] | undefined {
 
 export class EmailService {
   private transporter: Transporter;
+  private readonly fromUser: string;
 
-  constructor() {
+  constructor(auth?: { user: string; pass: string }) {
+    this.fromUser = auth?.user || process.env.GMAIL_APP_USER || "";
     this.transporter = nodemailer.createTransport({
       host: "smtp.gmail.com",
       port: 587,
       auth: {
-        user: process.env.GMAIL_APP_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
+        user: this.fromUser,
+        pass: auth?.pass || process.env.GMAIL_APP_PASSWORD,
       },
     });
   }
@@ -32,7 +34,7 @@ export class EmailService {
     bcc?: string,
   ): Promise<void> {
     await this.transporter.sendMail({
-      from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
+      from: `Visa Appointment Scheduler<${this.fromUser}>`,
       to: parseAddressList(to),
       bcc: parseAddressList(bcc),
       subject,

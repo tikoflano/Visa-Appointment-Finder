@@ -2,6 +2,14 @@ import { DatabaseService } from "./DatabaseService";
 import { EmailService } from "./EmailService";
 import { formatDate } from "../utils/dateUtils";
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export class NotificationService {
   private databaseService: DatabaseService;
   private emailService: EmailService;
@@ -14,38 +22,64 @@ export class NotificationService {
     this.emailService = emailService;
   }
 
-  async sendHeartbeatNotification(): Promise<void> {
-    if (!process.env.HEARTBEAT_TIME || !process.env.HEARTBEAT_DESTINATION) {
+  async sendHeartbeatNotification(options: {
+    force?: boolean;
+    destination?: string;
+    intervalMinutes?: number;
+  } = {}): Promise<boolean> {
+    const destination =
+      options.destination || process.env.HEARTBEAT_DESTINATION;
+    const intervalMinutes =
+      options.intervalMinutes ?? parseInt(process.env.HEARTBEAT_TIME || "", 10);
+    if (!destination || !Number.isFinite(intervalMinutes)) {
       throw Error("HEARTBEAT_* environment variable missing");
     }
 
-    const heartbeat_notification = await this.databaseService.getLastHeartbeatNotification();
-
-    heartbeat_notification &&
-      console.log(
-        `Last heartbeat notifcation was sent on ${heartbeat_notification["timestamp"]}`,
-      );
-
-    if (
-      !heartbeat_notification ||
-      Math.floor(
-        (+new Date() - +new Date(heartbeat_notification["timestamp"])) /
-          1000 /
-          60,
-      ) > parseInt(process.env.HEARTBEAT_TIME)
-    ) {
-      await this.emailService.sendMail(
-        process.env.HEARTBEAT_DESTINATION,
-        "Visa appointment scheduler is running",
-        "This is just to let you know that the script is currently running",
-      );
-
-      console.log("Heartbeat notifcation sent");
-
-      await this.databaseService.insertHeartbeatNotification();
-    } else {
+    const claimed = await this.databaseService.claimHeartbeatIfDue(
+      intervalMinutes,
+      !!options.force,
+    );
+    if (!claimed) {
       console.log("Heartbeat notifcation skipped");
+      return false;
     }
+
+    const report = await this.databaseService.getHeartbeatReport();
+    const healthy = report.anySuccess;
+    const profileLines = report.enabledProfiles.length
+      ? report.enabledProfiles
+          .map(
+            (profile) =>
+              `<li>${escapeHtml(profile.name)} (${escapeHtml(profile.visaProcessId)})</li>`,
+          )
+          .join("")
+      : "<li>None enabled</li>";
+    const runLines = report.recentRuns.length
+      ? report.recentRuns
+          .map(
+            (run) =>
+              `<li>${escapeHtml(run.startedAt)} — ${escapeHtml(run.name)} — ${escapeHtml(run.status)}</li>`,
+          )
+          .join("")
+      : "<li>No runs recorded yet</li>";
+    const statusLine = healthy
+      ? "At least one of the last 5 runs succeeded."
+      : "None of the last 5 runs succeeded. An admin needs to check the management UI.";
+
+    await this.emailService.sendMail(
+      destination,
+      healthy
+        ? "Visa appointment scheduler is running"
+        : "Visa appointment scheduler needs attention",
+      `<p>Scheduled visa appointment checks are running.</p>
+        <p><strong>Enabled profiles</strong></p>
+        <ul>${profileLines}</ul>
+        <p><strong>Last 5 runs</strong></p>
+        <ul>${runLines}</ul>
+        <p><strong>${statusLine}</strong></p>`,
+    );
+    console.log("Heartbeat notifcation sent");
+    return true;
   }
 
   async sendAppointmentNotification(
@@ -71,4 +105,3 @@ export class NotificationService {
     await this.databaseService.log("Email notification sent");
   }
 }
-

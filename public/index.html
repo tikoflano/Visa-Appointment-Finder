@@ -122,7 +122,6 @@
             </sl-tooltip>
           </div>
         </fieldset>
-        <sl-checkbox name="heartbeat">Send heartbeat emails</sl-checkbox>
         <sl-checkbox name="enabled">Enabled (run on schedule)</sl-checkbox>
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
@@ -164,6 +163,13 @@
               </sl-tooltip>
             </span>
           </sl-input>
+          <div class="check-row wide">
+            <sl-checkbox name="heartbeatEnabled">Send heartbeat emails</sl-checkbox>
+            <sl-tooltip placement="bottom">
+              <span slot="content">After any successful check, email the admin addresses at most once per heartbeat interval. The email lists enabled profiles and whether at least one of the last 5 runs succeeded. Multiple profiles share one email.</span>
+              <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat emails"></sl-icon-button>
+            </sl-tooltip>
+          </div>
           <sl-input name="intervalMinutes" type="number" min="1" required>
             <span slot="label" class="label-text">
               Check every (minutes)
@@ -177,11 +183,15 @@
             <span slot="label" class="label-text">
               Heartbeat every (minutes)
               <sl-tooltip placement="bottom">
-                <span slot="content">Minimum time between heartbeat emails after a successful check. Heartbeats go to the admin notification addresses.</span>
+                <span slot="content">Minimum minutes between heartbeat emails. Default 1440 (once a day). Concurrent profiles do not each send their own.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
               </sl-tooltip>
             </span>
           </sl-input>
+          <div class="check-row wide heartbeat-status">
+            <span id="last-heartbeat" class="hint">Last sent: never</span>
+            <sl-button id="send-heartbeat" type="button" size="small">Send now</sl-button>
+          </div>
           <sl-input name="maxConcurrentRuns" type="number" min="1" required>
             <span slot="label" class="label-text">
               Max concurrent runs

@@ -144,17 +144,17 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule, heartbeat.
+- **New profile** — visa account email/password, process ID, date window, notify and/or reschedule.
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them.
 - **Run now / Stop** — start or cancel a check immediately.
 - **Logs** — appointment messages (`log` table) and captured stdout/stderr of each run.
-- **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat interval, max concurrent runs, run timeout.
+- **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout.
 
 **Notify** emails the profile’s recipients when a matching date exists. **Admin notification emails** (`email_admin_destination` in Settings, comma separated) get a BCC; profile recipients do not see those addresses. A profile can leave notify emails empty to notify only the admin.
 
 **Reschedule** books the first matching date without asking.
 
-**Heartbeat** emails the admin notification addresses on a successful run, at most once per heartbeat interval (default 1440 minutes).
+**Heartbeat** is a Settings toggle. After any successful check, it emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes). Concurrent profiles share that one email so you get a single daily ping, not one per account. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately.
 
 To send mail you need a Gmail **App Password**:
 
@@ -171,9 +171,9 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 
 ## What is stored in SQLite
 
-**profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, actions (`notify`, `reschedule`), heartbeat flag, enabled flag.
+**profile** — one row per visa account: name, email, encrypted password, process ID, notify addresses, min/max dates, actions (`notify`, `reschedule`), enabled flag.
 
-**setting** — Gmail user, encrypted Gmail app password, admin notification emails, check interval, heartbeat interval, concurrency, run timeout, admin password hash, key-check ciphertext.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, check interval, heartbeat enabled/interval, concurrency, run timeout, admin password hash, key-check ciphertext.
 
 **run** — each scheduler/manual execution (status, output, timestamps). Old rows are pruned after 14 days.
 

@@ -247,7 +247,6 @@ function renderProfiles() {
                 badge(action, action === "reschedule" ? "warn" : "muted"),
               )
             : badge("none", "muted"),
-          profile.heartbeat ? badge("heartbeat", "muted") : null,
         ),
         el("td", { class: "nowrap" }, runBadge(profile)),
         el(
@@ -326,7 +325,6 @@ function openProfile(profile) {
 
   const values = profile || {
     actions: ["notify"],
-    heartbeat: true,
     enabled: true,
   };
   for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate"]) {
@@ -335,7 +333,6 @@ function openProfile(profile) {
   for (const checkbox of actionCheckboxes(profileForm)) {
     checkbox.checked = values.actions.includes(checkbox.value);
   }
-  named(profileForm, "heartbeat").checked = !!values.heartbeat;
   named(profileForm, "enabled").checked = !!values.enabled;
 
   const password = named(profileForm, "visaPassword");
@@ -375,7 +372,6 @@ profileForm.addEventListener("submit", async (event) => {
     minDate: named(form, "minDate").value || null,
     maxDate: named(form, "maxDate").value || null,
     actions,
-    heartbeat: named(form, "heartbeat").checked,
     enabled: named(form, "enabled").checked,
   };
 
@@ -433,7 +429,29 @@ $("#open-settings").addEventListener("click", async () => {
   named(settingsForm, "gmailAppPassword").placeholder = settings.hasGmailAppPassword
     ? "Leave empty to keep the stored password"
     : "Not set";
+  named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
+  $("#last-heartbeat").textContent = lastHeartbeatLabel(settings.lastHeartbeatAt);
   settingsDialog.show();
+});
+
+function lastHeartbeatLabel(iso) {
+  if (!iso) return "Last sent: never";
+  return `Last sent: ${formatTimestamp(iso)} (${relativeTime(iso)})`;
+}
+
+$("#send-heartbeat").addEventListener("click", async () => {
+  const button = $("#send-heartbeat");
+  setError(settingsForm);
+  button.loading = true;
+  try {
+    const result = await api("POST", "/api/heartbeat", {});
+    $("#last-heartbeat").textContent = lastHeartbeatLabel(result.lastHeartbeatAt);
+    toast("Heartbeat sent", "success");
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
 });
 
 settingsForm.addEventListener("submit", async (event) => {
@@ -446,6 +464,7 @@ settingsForm.addEventListener("submit", async (event) => {
       gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
       emailAdminDestination: named(form, "emailAdminDestination").value,
       intervalMinutes: Number(named(form, "intervalMinutes").value),
+      heartbeatEnabled: named(form, "heartbeatEnabled").checked,
       heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
       maxConcurrentRuns: Number(named(form, "maxConcurrentRuns").value),
       runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
