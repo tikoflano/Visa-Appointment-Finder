@@ -122,6 +122,34 @@ function dateWindow(profile) {
   );
 }
 
+function notifyAddresses(profile) {
+  return String(profile.emailDestination || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function actionBadge(action, profile) {
+  const node = badge(
+    action,
+    action === "reschedule" ? "ok" : action === "notify" ? "warn" : "muted",
+  );
+  if (action !== "notify") return node;
+  const lines = notifyAddresses(profile);
+  const tip = el(
+    "sl-tooltip",
+    { class: "notify-tip", placement: "top", hoist: true },
+    el(
+      "span",
+      { slot: "content", class: "notify-tip-list" },
+      lines.length ? lines.join("\n") : "No notify addresses",
+    ),
+    node,
+  );
+  tip.setAttribute("hoist", "");
+  return tip;
+}
+
 function badge(text, kind) {
   const variant =
     { ok: "success", bad: "danger", warn: "warning", info: "primary", muted: "neutral", idle: "neutral" }[
@@ -382,9 +410,7 @@ function renderProfiles() {
           "td",
           {},
           profile.actions.length
-            ? profile.actions.map((action) =>
-                badge(action, action === "reschedule" ? "ok" : action === "notify" ? "warn" : "muted"),
-              )
+            ? profile.actions.map((action) => actionBadge(action, profile))
             : badge("none", "muted"),
         ),
         el("td", { class: "nowrap" }, runBadge(profile)),

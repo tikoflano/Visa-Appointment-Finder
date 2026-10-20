@@ -217,6 +217,16 @@ sl-tooltip {
   font-weight: normal;
 }
 
+sl-tooltip.notify-tip {
+  --max-width: 22rem;
+}
+
+.notify-tip-list {
+  display: block;
+  white-space: pre-line;
+  text-align: left;
+}
+
 sl-alert {
   margin-bottom: 12px;
 }
@@ -296,7 +306,7 @@ th {
   background: #fafbfc;
 }
 
-tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip)) {
+tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip, .notify-tip)) {
   opacity: var(--disabled-row-opacity);
 }
 
