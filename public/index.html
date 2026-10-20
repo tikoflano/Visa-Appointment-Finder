@@ -46,6 +46,14 @@
             <sl-icon-button id="new-profile" class="hero-action add" name="person-plus-fill" label="New profile"></sl-icon-button>
           </sl-tooltip>
           <sl-tooltip placement="bottom" hoist>
+            <span slot="content">All runs</span>
+            <sl-icon-button id="open-all-runs" class="hero-action all-runs" name="clock-history" label="All runs"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Calendar</span>
+            <sl-icon-button id="open-calendar" class="hero-action calendar" name="calendar3" label="Calendar"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
             <span slot="content">Notifications</span>
             <sl-icon-button id="open-notifications" class="hero-action notifications" name="bell-fill" label="Notifications"></sl-icon-button>
           </sl-tooltip>
@@ -289,6 +297,9 @@
         <sl-input id="runs-to" type="datetime-local" label="To" size="small"></sl-input>
       </div>
       <div class="runs-filters">
+        <sl-select id="runs-profile" label="Profile" size="small" value="any" hoist hidden>
+          <sl-option value="any">All profiles</sl-option>
+        </sl-select>
         <sl-select id="runs-notified" label="Notified" size="small" value="any" hoist>
           <sl-option value="any">Any</sl-option>
           <sl-option value="yes">Yes</sl-option>
@@ -310,8 +321,28 @@
         <p class="runs-mix-legend sub" data-runs-mix-legend></p>
       </div>
       <div class="runs-wrap">
-        <table class="logs"><tbody data-runs></tbody></table>
+        <table class="logs">
+          <thead data-runs-head></thead>
+          <tbody data-runs></tbody>
+        </table>
       </div>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="calendar-dialog" class="wide-dialog calendar-dialog" label="Search calendar">
+      <div class="calendar-toolbar">
+        <sl-button id="calendar-prev" size="small">Previous</sl-button>
+        <h2 class="calendar-title" data-calendar-title>Month</h2>
+        <sl-button id="calendar-today" size="small">Today</sl-button>
+        <sl-button id="calendar-next" size="small">Next</sl-button>
+      </div>
+      <p class="sub calendar-hint">
+        Enabled profiles and the days they search. A booked AIS appointment is marked on that day and is not part of the window when latest date is empty.
+      </p>
+      <div class="calendar-grid" data-calendar></div>
+      <div class="calendar-legend" data-calendar-legend></div>
       <div slot="footer" class="dialog-actions">
         <sl-button data-close>Close</sl-button>
       </div>

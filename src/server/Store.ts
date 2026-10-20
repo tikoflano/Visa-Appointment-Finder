@@ -97,6 +97,7 @@ export type RunStatus =
 export interface Run {
   id: number;
   profileId: number;
+  profileName: string | null;
   trigger: string;
   status: RunStatus;
   exitCode: number | null;
@@ -725,7 +726,7 @@ export class Store {
   }
 
   async listRuns(
-    profileId: number,
+    profileId: number | null,
     limit: number,
     range: {
       from?: string;
@@ -734,24 +735,35 @@ export class Store {
       order?: "asc" | "desc";
     } = {},
   ): Promise<Run[]> {
-    const clauses = ["profile_id = ?"];
-    const params: unknown[] = [profileId];
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (profileId != null) {
+      clauses.push("r.profile_id = ?");
+      params.push(profileId);
+    }
     if (range.from) {
-      clauses.push("started_at >= ?");
+      clauses.push("r.started_at >= ?");
       params.push(range.from);
     }
     if (range.to) {
-      clauses.push("started_at <= ?");
+      clauses.push("r.started_at <= ?");
       params.push(range.to);
     }
     if (range.notified === true) {
-      clauses.push("json_extract(result, '$.notified') = 1");
+      clauses.push("json_extract(r.result, '$.notified') = 1");
     } else if (range.notified === false) {
-      clauses.push("(result IS NULL OR json_extract(result, '$.notified') IS NOT 1)");
+      clauses.push(
+        "(r.result IS NULL OR json_extract(r.result, '$.notified') IS NOT 1)",
+      );
     }
     params.push(limit);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = await this.db.all(
-      `SELECT * FROM run WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+      `SELECT r.*, p.name AS profile_name
+       FROM run r
+       LEFT JOIN profile p ON p.id = r.profile_id
+       ${where}
+       ORDER BY r.id DESC LIMIT ?`,
       params,
     );
     const runs = rows.map((row) => this.toRun(row));
@@ -759,11 +771,15 @@ export class Store {
   }
 
   async getNotifiedRange(
-    profileId: number,
+    profileId: number | null,
     range: { from?: string; to?: string } = {},
   ): Promise<{ count: number; firstAt: string | null; lastAt: string | null }> {
-    const clauses = ["profile_id = ?", "json_extract(result, '$.notified') = 1"];
-    const params: unknown[] = [profileId];
+    const clauses = ["json_extract(result, '$.notified') = 1"];
+    const params: unknown[] = [];
+    if (profileId != null) {
+      clauses.push("profile_id = ?");
+      params.push(profileId);
+    }
     if (range.from) {
       clauses.push("started_at >= ?");
       params.push(range.from);
@@ -803,7 +819,13 @@ export class Store {
   }
 
   async getRun(runId: number): Promise<Run | undefined> {
-    const row = await this.db.get("SELECT * FROM run WHERE id = ?", [runId]);
+    const row = await this.db.get(
+      `SELECT r.*, p.name AS profile_name
+       FROM run r
+       LEFT JOIN profile p ON p.id = r.profile_id
+       WHERE r.id = ?`,
+      [runId],
+    );
     return row ? this.toRun(row, true) : undefined;
   }
 
@@ -819,6 +841,7 @@ export class Store {
     return {
       id: row.id,
       profileId: row.profile_id,
+      profileName: row.profile_name ?? null,
       trigger: row.trigger,
       status: row.status,
       exitCode: row.exit_code,

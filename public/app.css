@@ -146,6 +146,14 @@ h1 {
   color: #ffd56a;
 }
 
+.hero .toolbar sl-icon-button.all-runs {
+  color: #c5d8ff;
+}
+
+.hero .toolbar sl-icon-button.calendar {
+  color: #8ee0b5;
+}
+
 .hero .toolbar sl-icon-button.notifications {
   color: #f0c14b;
 }
@@ -410,6 +418,15 @@ sl-dialog.wide-dialog::part(panel) {
   width: min(960px, 94vw);
 }
 
+sl-dialog.calendar-dialog::part(panel) {
+  width: min(1120px, 96vw);
+}
+
+sl-dialog.calendar-dialog::part(body) {
+  max-height: min(80vh, 900px);
+  overflow: auto;
+}
+
 sl-dialog::part(header) {
   align-items: center;
   background:
@@ -617,6 +634,110 @@ pre[data-output] {
   word-break: break-word;
   font-size: 12px;
   margin: 12px 0 0;
+}
+
+.calendar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.calendar-title {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.calendar-hint {
+  margin: 0 0 12px;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.calendar-weekday {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 6px;
+}
+
+.calendar-cell {
+  min-height: 7.2rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.calendar-cell.outside {
+  background: #f7f8fb;
+  opacity: 0.55;
+}
+
+.calendar-cell.today {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.calendar-daynum {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.calendar-chip {
+  font-size: 11px;
+  line-height: 1.25;
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-chip.booked {
+  background: transparent;
+  border: 1px dashed currentColor;
+  color: inherit;
+}
+
+.calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 14px;
+}
+
+.calendar-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.calendar-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.calendar-legend-meta {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {

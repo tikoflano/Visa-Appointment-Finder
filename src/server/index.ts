@@ -392,6 +392,32 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "GET",
+      pattern: /^\/api\/runs$/,
+      handler: async ({ url }) => {
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 500);
+        const from = parseIsoQuery(url.searchParams.get("from"), "from");
+        const to = parseIsoQuery(url.searchParams.get("to"), "to");
+        if (from && to && from > to) throw new HttpError(400, "From must be before To");
+        const notified = parseNotifiedQuery(url.searchParams.get("notified"));
+        const order = parseOrderQuery(url.searchParams.get("order"));
+        const rawProfile = url.searchParams.get("profileId");
+        let profileId: number | null = null;
+        if (rawProfile) {
+          profileId = Number(rawProfile);
+          if (!Number.isInteger(profileId) || profileId < 1) {
+            throw new HttpError(400, "Invalid profileId");
+          }
+          await requireProfile(profileId);
+        }
+        const [runs, notifiedRange] = await Promise.all([
+          store.listRuns(profileId, limit, { from, to, notified, order }),
+          store.getNotifiedRange(profileId, { from, to }),
+        ]);
+        return { runs, notified: notifiedRange };
+      },
+    },
+    {
+      method: "GET",
       pattern: /^\/api\/runs\/(\d+)$/,
       handler: async ({ params }) => {
         const run = await store.getRun(Number(params[0]));

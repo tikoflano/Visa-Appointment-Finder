@@ -669,12 +669,14 @@ const datesDialog = $("#dates-dialog");
 const errorDialog = $("#error-dialog");
 const runsFrom = $("#runs-from");
 const runsTo = $("#runs-to");
+const runsProfile = $("#runs-profile");
 const runsNotified = $("#runs-notified");
 const runsOrder = $("#runs-order");
 const runsClearFilter = $("#runs-clear-filter");
 let runsCache = [];
 let runsNotifiedMeta = { count: 0, firstAt: null, lastAt: null };
 let runsProfileId = null;
+let runsAllMode = false;
 let runsLoadGen = 0;
 let expandedRunId = null;
 let expandedRun = null;
@@ -693,6 +695,7 @@ function runsFilterActive() {
   return Boolean(
     runsFrom.value ||
       runsTo.value ||
+      (runsAllMode && runsProfile.value !== "any") ||
       runsNotified.value !== "any" ||
       runsOrder.value !== "desc",
   );
@@ -753,6 +756,7 @@ function runStatusBadge(run) {
 function resultDetail(run) {
   const result = run.result;
   const rows = [];
+  if (run.profileName) rows.push(["Profile", run.profileName]);
   if (!result) {
     rows.push(["Status", run.status]);
   } else {
@@ -822,7 +826,15 @@ function renderRunsMix() {
   setSeg(okSeg, ok);
   setSeg(badSeg, bad);
   setSeg(otherSeg, other);
-  const parts = [`${ok} succeeded`, `${bad} errored`];
+  const decided = ok + bad;
+  const parts = [];
+  if (decided) {
+    parts.push(`${ok} succeeded (${Math.round((ok / decided) * 100)}%)`);
+    parts.push(`${bad} errored (${Math.round((bad / decided) * 100)}%)`);
+  } else {
+    parts.push(`${ok} succeeded`);
+    parts.push(`${bad} errored`);
+  }
   if (other) parts.push(`${other} other`);
   const summary = parts.join(" · ");
   $("[data-runs-mix-legend]", root).textContent = summary;
@@ -833,6 +845,20 @@ function renderRunsMix() {
 function renderRunRows(emptyMessage) {
   renderNotifiedRange();
   renderRunsMix();
+  const showProfile = runsAllMode;
+  const cols = showProfile ? 5 : 4;
+  const head = $("[data-runs-head]", runsDialog);
+  head.replaceChildren(
+    el(
+      "tr",
+      {},
+      el("th", {}, "When"),
+      showProfile ? el("th", {}, "Profile") : null,
+      el("th", {}, "Result"),
+      el("th", {}, "Trigger"),
+      el("th", {}, "Duration"),
+    ),
+  );
   const body = $("[data-runs]", runsDialog);
   if (!runsCache.length) {
     body.replaceChildren(
@@ -841,7 +867,7 @@ function renderRunRows(emptyMessage) {
         {},
         el(
           "td",
-          { class: "sub", colspan: "4" },
+          { class: "sub", colspan: String(cols) },
           emptyMessage || (runsFilterActive() ? "No runs in this range" : "No runs yet"),
         ),
       ),
@@ -856,6 +882,7 @@ function renderRunRows(emptyMessage) {
         "tr",
         { class: expanded ? "clickable expanded" : "clickable", onclick: () => toggleRun(run) },
         el("td", { class: "mono nowrap" }, formatTimestamp(run.startedAt)),
+        showProfile ? el("td", {}, run.profileName || el("span", { class: "hint" }, "—")) : null,
         el(
           "td",
           {},
@@ -875,7 +902,7 @@ function renderRunRows(emptyMessage) {
         el(
           "tr",
           { class: "run-detail" },
-          el("td", { colspan: "4" }, resultDetail(expandedRun || run)),
+          el("td", { colspan: String(cols) }, resultDetail(expandedRun || run)),
         ),
       );
     }
@@ -884,7 +911,7 @@ function renderRunRows(emptyMessage) {
 }
 
 async function loadRuns() {
-  if (!runsProfileId) return;
+  if (!runsAllMode && !runsProfileId) return;
   const from = localDateTimeToIso(runsFrom.value);
   const to = localDateTimeToIso(runsTo.value, true);
   if (from && to && from > to) {
@@ -901,9 +928,14 @@ async function loadRuns() {
   if (to) params.set("to", to);
   if (runsNotified.value === "yes") params.set("notified", "yes");
   if (runsNotified.value === "no") params.set("notified", "no");
+  let path = `/api/profiles/${runsProfileId}/runs`;
+  if (runsAllMode) {
+    path = "/api/runs";
+    if (runsProfile.value !== "any") params.set("profileId", runsProfile.value);
+  }
   const gen = ++runsLoadGen;
   try {
-    const data = await api("GET", `/api/profiles/${runsProfileId}/runs?${params}`);
+    const data = await api("GET", `${path}?${params}`);
     if (gen !== runsLoadGen) return;
     runsCache = data.runs || [];
     runsNotifiedMeta = data.notified || { count: 0, firstAt: null, lastAt: null };
@@ -916,25 +948,58 @@ async function loadRuns() {
   }
 }
 
+function fillRunsProfileSelect() {
+  const current = runsProfile.value || "any";
+  runsProfile.replaceChildren(
+    el("sl-option", { value: "any" }, "All profiles"),
+    ...sortedProfiles().map((profile) =>
+      el("sl-option", { value: String(profile.id) }, profile.name),
+    ),
+  );
+  runsProfile.value = [...runsProfile.querySelectorAll("sl-option")].some(
+    (option) => option.value === current,
+  )
+    ? current
+    : "any";
+}
+
 function resetRunsFilters({ keepRange = false } = {}) {
   if (!keepRange) {
     runsFrom.value = "";
     runsTo.value = "";
   }
+  runsProfile.value = "any";
   runsNotified.value = "any";
   runsOrder.value = "desc";
   updateRunsClearButton();
 }
 
-async function openRuns(profile) {
+function prepareRunsDialog() {
   expandedRunId = null;
   expandedRun = null;
-  runsProfileId = profile.id;
   const range = last24HoursRange();
   runsFrom.value = range.from;
   runsTo.value = range.to;
   resetRunsFilters({ keepRange: true });
+}
+
+async function openRuns(profile) {
+  runsAllMode = false;
+  runsProfileId = profile.id;
+  runsProfile.hidden = true;
+  prepareRunsDialog();
   runsDialog.label = `Runs — ${profile.name}`;
+  runsDialog.show();
+  await loadRuns();
+}
+
+async function openAllRuns() {
+  runsAllMode = true;
+  runsProfileId = null;
+  fillRunsProfileSelect();
+  runsProfile.hidden = false;
+  prepareRunsDialog();
+  runsDialog.label = "All runs";
   runsDialog.show();
   await loadRuns();
 }
@@ -967,10 +1032,15 @@ runsOrder.addEventListener("sl-change", () => {
   updateRunsClearButton();
   loadRuns();
 });
+runsProfile.addEventListener("sl-change", () => {
+  updateRunsClearButton();
+  loadRuns();
+});
 runsClearFilter.addEventListener("click", () => {
   resetRunsFilters();
   loadRuns();
 });
+$("#open-all-runs").addEventListener("click", () => openAllRuns());
 
 // ---- Notifications dialog ----
 
@@ -1124,6 +1194,192 @@ function toggleNotification(note) {
 }
 
 $("#open-notifications").addEventListener("click", () => openNotifications());
+
+// ---- Calendar dialog ----
+
+const calendarDialog = $("#calendar-dialog");
+const PROFILE_COLORS = [
+  "#2457d6",
+  "#0f766e",
+  "#a15c07",
+  "#7c3aed",
+  "#b42318",
+  "#1d4ed8",
+  "#c2410c",
+  "#be185d",
+  "#365314",
+  "#0369a1",
+];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+let calendarCursor = { year: new Date().getFullYear(), month: new Date().getMonth() };
+
+function profileColor(id) {
+  return PROFILE_COLORS[Math.abs(Number(id) || 0) % PROFILE_COLORS.length];
+}
+
+function addIsoDays(iso, days) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    date.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function localIsoDate(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function profileSearchRange(profile) {
+  const booked = profile.currentAppointmentDate || null;
+  if (profile.maxDate) {
+    return { start: profile.minDate || null, end: profile.maxDate, booked, unknown: false };
+  }
+  if (!booked) {
+    return { start: null, end: null, booked: null, unknown: true };
+  }
+  return {
+    start: profile.minDate || null,
+    end: addIsoDays(booked, -1),
+    booked,
+    unknown: false,
+  };
+}
+
+function isoInWindow(iso, range) {
+  if (range.unknown || !range.end) return false;
+  if (range.start && iso < range.start) return false;
+  return iso <= range.end;
+}
+
+function windowLabel(range) {
+  if (range.unknown) return "no window yet";
+  if (range.start && range.end && range.start > range.end) return "empty window";
+  const start = formatDate(range.start) || "…";
+  const end = formatDate(range.end) || "…";
+  return `${start} – ${end}`;
+}
+
+function monthCells(year, month) {
+  const first = new Date(year, month, 1);
+  const start = new Date(year, month, 1 - first.getDay());
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    cells.push({
+      iso: localIsoDate(date),
+      day: date.getDate(),
+      outside: date.getMonth() !== month,
+    });
+  }
+  while (cells.length > 7 && cells.slice(-7).every((cell) => cell.outside)) {
+    cells.splice(-7, 7);
+  }
+  return cells;
+}
+
+function renderCalendar() {
+  const { year, month } = calendarCursor;
+  const title = new Date(year, month, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  $("[data-calendar-title]", calendarDialog).textContent = title;
+  const today = localIsoDate();
+  const enabled = profiles.filter((profile) => profile.enabled);
+  const ranges = new Map(enabled.map((profile) => [profile.id, profileSearchRange(profile)]));
+
+  const nodes = WEEKDAYS.map((label) => el("div", { class: "calendar-weekday" }, label));
+  for (const cell of monthCells(year, month)) {
+    const chips = [];
+    for (const profile of enabled) {
+      const range = ranges.get(profile.id);
+      const color = profileColor(profile.id);
+      if (isoInWindow(cell.iso, range)) {
+        chips.push(
+          el(
+            "span",
+            {
+              class: "calendar-chip",
+              style: `background:${color}`,
+              title: `${profile.name}: searching ${windowLabel(range)}`,
+            },
+            profile.name,
+          ),
+        );
+      }
+      if (range.booked === cell.iso) {
+        chips.push(
+          el(
+            "span",
+            {
+              class: "calendar-chip booked",
+              style: `color:${color}; border-color:${color}`,
+              title: `${profile.name}: booked appointment`,
+            },
+            `${profile.name} booked`,
+          ),
+        );
+      }
+    }
+    nodes.push(
+      el(
+        "div",
+        {
+          class: `calendar-cell${cell.outside ? " outside" : ""}${cell.iso === today ? " today" : ""}`,
+        },
+        el("div", { class: "calendar-daynum" }, String(cell.day)),
+        ...chips,
+      ),
+    );
+  }
+  $("[data-calendar]", calendarDialog).replaceChildren(...nodes);
+
+  const legend = $("[data-calendar-legend]", calendarDialog);
+  if (!enabled.length) {
+    legend.replaceChildren(el("p", { class: "hint" }, "No enabled profiles."));
+    return;
+  }
+  legend.replaceChildren(
+    ...enabled.map((profile) => {
+      const range = ranges.get(profile.id);
+      return el(
+        "div",
+        { class: "calendar-legend-item" },
+        el("span", { class: "calendar-legend-swatch", style: `background:${profileColor(profile.id)}` }),
+        el(
+          "span",
+          {},
+          profile.name,
+          el("div", { class: "calendar-legend-meta" }, windowLabel(range)),
+        ),
+      );
+    }),
+  );
+}
+
+function shiftCalendar(delta) {
+  const date = new Date(calendarCursor.year, calendarCursor.month + delta, 1);
+  calendarCursor = { year: date.getFullYear(), month: date.getMonth() };
+  renderCalendar();
+}
+
+function openCalendar() {
+  const now = new Date();
+  calendarCursor = { year: now.getFullYear(), month: now.getMonth() };
+  calendarDialog.show();
+  renderCalendar();
+}
+
+$("#open-calendar").addEventListener("click", () => openCalendar());
+$("#calendar-prev").addEventListener("click", () => shiftCalendar(-1));
+$("#calendar-next").addEventListener("click", () => shiftCalendar(1));
+$("#calendar-today").addEventListener("click", () => {
+  const now = new Date();
+  calendarCursor = { year: now.getFullYear(), month: now.getMonth() };
+  renderCalendar();
+});
+
 notesFrom.addEventListener("sl-change", () => {
   updateNotesClearButton();
   loadNotifications();
