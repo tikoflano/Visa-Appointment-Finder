@@ -11,7 +11,10 @@ import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
 import { addDays, formatDate } from "./utils/dateUtils";
 
+// dotenv never overwrites already set variables, so loading the instance file
+// first lets it override the shared one.
 dotenv.config();
+dotenv.config({ path: ".env.shared" });
 
 (async () => {
   const db = await open({

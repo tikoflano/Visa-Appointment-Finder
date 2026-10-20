@@ -52,16 +52,21 @@ export class NotificationService {
     firstDate: Date,
     extraDates?: string,
   ): Promise<void> {
-    if (!process.env.EMAIL_DESTINATION) {
+    const destination = process.env.EMAIL_DESTINATION || undefined;
+    const adminDestination = process.env.EMAIL_ADMIN_DESTINATION || undefined;
+
+    const to = destination ?? adminDestination;
+    if (!to) {
       throw Error("Destination address not set");
     }
 
     await this.emailService.sendMail(
-      process.env.EMAIL_DESTINATION,
+      to,
       "Visa appointment available",
       `There is a visa appointment available on ${formatDate(firstDate)}. 
         Go to https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment to schedule it. ` +
         (extraDates ? `Other available appointments: ${extraDates}` : ""),
+      destination ? adminDestination : undefined,
     );
     await this.databaseService.log("Email notification sent");
   }

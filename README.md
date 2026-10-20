@@ -4,8 +4,19 @@ This project was created to help getting a Visa appointment in the Chilean consu
 
 ## Getting started
 
-- `cp .env_example .env`
-- `nano .env` and set at least the `VISA_*` variables.
+Configuration is split in two files:
+
+- `.env.shared`: values common to every instance (Gmail sender, admin and heartbeat settings).
+- `.env` (or `.env.<name>` per instance): the visa account and who gets notified.
+
+Values in the instance file override the ones in `.env.shared`.
+
+- `cp .env_shared_example .env.shared` and set the `GMAIL_*`, `EMAIL_ADMIN_DESTINATION` and `HEARTBEAT_*` variables.
+- `cp .env_example .env` and set the `VISA_*` variables and `EMAIL_DESTINATION`.
+
+`EMAIL_ADMIN_DESTINATION` receives a BCC of every appointment notification, so instance owners don't see it. `EMAIL_DESTINATION` can be left empty to notify only the admin.
+
+Don't use quotes or inline comments (`KEY=value # comment`) in these files: Docker treats them as part of the value.
 
 To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 
@@ -13,7 +24,7 @@ To set the `GMAIL_*` env variables, you will need to set up an **App Password**.
 - Enable 2 factor authentication
 - Inside 2FA page go to App Passwords
 - Create a new password for the email app using "other" device.
-- Set this password in the .env file
+- Set this password in the `.env.shared` file
 
 ## Run the script
 
@@ -58,3 +69,4 @@ You can view the latest log entries with:
 
 The `./run.sh` can accept a **FIRST** argument like `--env .env.something` that will be used, otherwise it will use `.env`. Any other flags go after it, eg: `./run.sh --env .env.something --minDate=11/16/2026`.
 This way you can schedule multiple instances to be running, each one of them with its own credentials and visa process.
+All instances also load `.env.shared`, so shared settings only need to be changed in one place.

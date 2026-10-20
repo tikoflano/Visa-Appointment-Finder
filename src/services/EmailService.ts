@@ -15,10 +15,16 @@ export class EmailService {
     });
   }
 
-  async sendMail(to: string, subject: string, html: string): Promise<void> {
+  async sendMail(
+    to: string,
+    subject: string,
+    html: string,
+    bcc?: string,
+  ): Promise<void> {
     await this.transporter.sendMail({
       from: `Visa Appointment Scheduler<${process.env.GMAIL_APP_USER}>`,
       to,
+      bcc,
       subject,
       html,
     });
