@@ -78,9 +78,14 @@ sl-alert {
   margin-bottom: 12px;
 }
 
+#login-view {
+  display: flex;
+  justify-content: center;
+}
+
 .login {
-  max-width: 360px;
-  margin: 10vh auto;
+  width: min(360px, 100%);
+  margin-top: 10vh;
 }
 
 .login form {

@@ -20,10 +20,12 @@ Usage: ./run.sh [options]
 
 Start (default):
   ./run.sh                 Start visa-ui detached (rebuild if source changed)
+  ./run.sh run             Same as ./run.sh
   --rebuild                Force-rebuild the image
   --foreground             Run attached to this terminal
 
 Commands:
+  run                      Same as the default start
   dev                      Vite HMR UI + host API. No Docker, no login, no scheduler
   restart                  Recreate visa-ui even if it is already running
   stop                     Stop and remove visa-ui
@@ -209,6 +211,7 @@ while [ $# -gt 0 ]; do
     --rebuild) rebuild_flag=--rebuild; shift ;;
     --foreground) foreground=1; shift ;;
     --restart | restart) do_restart=1; shift ;;
+    run) shift ;;
     -h | --help)
       usage
       exit 0

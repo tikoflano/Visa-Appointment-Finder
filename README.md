@@ -91,7 +91,7 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 
 | Command | What it does |
 | --- | --- |
-| `./run.sh` | Start `visa-ui` in the background. Rebuilds the image if source changed. If the container is already running and the image did not change, prints the URL and exits. |
+| `./run.sh` or `./run.sh run` | Start `visa-ui` in the background. Rebuilds the image if source changed. If the container is already running and the image did not change, prints the URL and exits. |
 | `./run.sh restart` | Recreate `visa-ui` even if it is already running. Rebuilds the image only if source changed. |
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
@@ -118,6 +118,7 @@ Examples:
 
 ```sh
 ./run.sh
+./run.sh run
 ./run.sh restart
 ./run.sh dev
 ./run.sh logs
