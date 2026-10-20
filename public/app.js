@@ -258,10 +258,7 @@ function renderProfiles() {
           "td",
           { class: "message" },
           profile.lastLog
-            ? [
-                el("div", { class: "clamp", title: profile.lastLog.message }, profile.lastLog.message.split("\n")[0]),
-                el("div", { class: "sub" }, profile.lastLog.timestamp),
-              ]
+            ? el("div", { class: "clamp", title: profile.lastLog.message }, profile.lastLog.message.split("\n")[0])
             : el("span", { class: "sub" }, "—"),
         ),
         el(

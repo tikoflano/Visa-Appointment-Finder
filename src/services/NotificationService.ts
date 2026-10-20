@@ -40,7 +40,7 @@ export class NotificationService {
       !!options.force,
     );
     if (!claimed) {
-      console.log("Heartbeat notifcation skipped");
+      console.log("Heartbeat notification skipped");
       return false;
     }
 
@@ -78,7 +78,7 @@ export class NotificationService {
         <ul>${runLines}</ul>
         <p><strong>${statusLine}</strong></p>`,
     );
-    console.log("Heartbeat notifcation sent");
+    console.log("Heartbeat notification sent");
     return true;
   }
 
