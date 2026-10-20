@@ -47,6 +47,8 @@ export default defineConfig({
   build: {
     outDir: path.join(rootDir, "build/ui"),
     emptyOutDir: true,
+    // Data-URI SVGs break `url(#id)` fills (hero mark / favicon gradients).
+    assetsInlineLimit: 0,
   },
   server: {
     host: "127.0.0.1",

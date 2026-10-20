@@ -27,7 +27,7 @@ export type ProfileState = "running" | "queued" | "idle";
 export class Scheduler {
   private readonly store: Store;
   private readonly active = new Map<number, ActiveRun>();
-  private queue: { profileId: number; trigger: string }[] = [];
+  private queue: { profileId: number; trigger: string; enqueuedAt: number }[] = [];
   private draining: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private lastPrune = 0;
@@ -68,9 +68,30 @@ export class Scheduler {
   /** Returns false when the profile is already running or queued. */
   enqueue(profileId: number, trigger: string): boolean {
     if (this.getState(profileId) !== "idle") return false;
-    this.queue.push({ profileId, trigger });
+    this.queue.push({ profileId, trigger, enqueuedAt: Date.now() });
     this.drain();
     return true;
+  }
+
+  /**
+   * True when this profile is occupying the queue longer than the check
+   * interval: still running past intervalMinutes, or waiting in queue that long.
+   */
+  isBehind(
+    profileId: number,
+    lastStartedAt: string | null | undefined,
+    intervalMs: number,
+  ): { behind: boolean; elapsedMs: number } {
+    const now = Date.now();
+    if (this.active.has(profileId)) {
+      const started = lastStartedAt ? Date.parse(lastStartedAt) : NaN;
+      const elapsedMs = Number.isFinite(started) ? now - started : 0;
+      return { behind: elapsedMs > intervalMs, elapsedMs };
+    }
+    const item = this.queue.find((entry) => entry.profileId === profileId);
+    if (!item) return { behind: false, elapsedMs: 0 };
+    const elapsedMs = now - item.enqueuedAt;
+    return { behind: elapsedMs > intervalMs, elapsedMs };
   }
 
   cancel(profileId: number): boolean {

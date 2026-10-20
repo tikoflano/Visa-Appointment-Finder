@@ -17,6 +17,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const named = (form, name) => form.querySelector(`[name="${name}"]`);
 
 let profiles = [];
+let checkIntervalMinutes = 5;
 let refreshTimer;
 let setupMode = false;
 let confirmResolve;
@@ -96,9 +97,12 @@ function dateWindow(profile) {
 
 function badge(text, kind) {
   const variant =
-    { ok: "success", bad: "danger", warn: "warning", info: "primary", muted: "neutral" }[kind] ||
-    "neutral";
-  return el("sl-badge", { variant, pill: true }, text);
+    { ok: "success", bad: "danger", warn: "warning", info: "primary", muted: "neutral", idle: "neutral" }[
+      kind
+    ] || "neutral";
+  const node = el("sl-badge", { variant, pill: true }, text);
+  if (kind === "idle") node.classList.add("idle-badge");
+  return node;
 }
 
 function setError(form, message) {
@@ -138,6 +142,26 @@ function setBanner(id, visible) {
   const banner = $(id);
   banner.hidden = !visible;
   banner.open = !!visible;
+}
+
+function setQueueWarning() {
+  const behind = profiles.filter((profile) => profile.behind);
+  const banner = $("#queue-warning");
+  const visible = behind.length > 0;
+  if (visible) {
+    const names = behind.map((profile) => profile.name);
+    const shown = names.slice(0, 5).join(", ");
+    const extra = names.length > 5 ? ` and ${names.length - 5} more` : "";
+    $("#queue-warning-text").textContent =
+      `Scheduler is behind the ${checkIntervalMinutes}-minute check interval. Still running or queued: ${shown}${extra}. Raise Max concurrent runs, enable fewer profiles, or increase Check every.`;
+  }
+  banner.hidden = !visible;
+  banner.open = visible;
+}
+
+function formatDuration(ms) {
+  const minutes = Math.max(1, Math.round(Number(ms) / 60000));
+  return `${minutes}m`;
 }
 
 // ---- Session ----
@@ -218,7 +242,9 @@ async function refresh() {
       api("GET", "/api/settings"),
     ]);
     profiles = profileList;
+    checkIntervalMinutes = Number(settings.intervalMinutes) || 5;
     setBanner("#settings-warning", !(settings.gmailUser && settings.hasGmailAppPassword));
+    setQueueWarning();
     renderProfiles();
   } catch (error) {
     console.error(error);
@@ -233,12 +259,24 @@ function outcomeLabel(outcome) {
 }
 
 function runBadge(profile) {
-  if (profile.state === "running") return badge("running", "info");
-  if (profile.state === "queued") return badge("queued", "info");
+  if (profile.state === "running" || profile.state === "queued") {
+    const node = badge(profile.state, profile.behind ? "warn" : "info");
+    if (!profile.behind) return node;
+    return el(
+      "sl-tooltip",
+      { placement: "top", hoist: true },
+      el(
+        "span",
+        { slot: "content" },
+        `This profile has been ${profile.state} for ${formatDuration(profile.behindMs)} (check interval is ${checkIntervalMinutes}m).`,
+      ),
+      node,
+    );
+  }
   const run = profile.lastRun;
   if (!run) return badge("never run", "muted");
   const outcome = run.result?.outcome;
-  if (outcome === "none") return badge("none available", "muted");
+  if (outcome === "none") return badge("none available", "idle");
   if (outcome === "available") {
     const node = badge("available", "ok");
     node.classList.add("clickable-badge");
@@ -248,8 +286,25 @@ function runBadge(profile) {
     });
     return node;
   }
-  if (outcome === "error") return badge("error", "bad");
+  if (outcome === "error") {
+    const node = badge("error", "bad");
+    node.classList.add("clickable-badge");
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openRunError(run);
+    });
+    return node;
+  }
   const kind = run.status === "success" ? "ok" : run.status === "cancelled" ? "muted" : "bad";
+  if (kind === "bad") {
+    const node = badge(run.status, kind);
+    node.classList.add("clickable-badge");
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openRunError(run);
+    });
+    return node;
+  }
   return badge(run.status, kind);
 }
 
@@ -529,6 +584,7 @@ settingsForm.addEventListener("submit", async (event) => {
 
 const runsDialog = $("#runs-dialog");
 const datesDialog = $("#dates-dialog");
+const errorDialog = $("#error-dialog");
 let runsCache = [];
 let expandedRunId = null;
 let expandedRun = null;
@@ -541,10 +597,40 @@ function openAvailableDates(dates) {
   datesDialog.show();
 }
 
+function fillErrorDialog(run) {
+  $("[data-error-when]", errorDialog).textContent = run.startedAt
+    ? formatTimestamp(run.startedAt)
+    : "";
+  $("[data-error-message]", errorDialog).textContent =
+    run.result?.error ||
+    (run.status === "timeout" ? "The check timed out." : "") ||
+    (run.status === "interrupted" ? "The check was interrupted." : "") ||
+    `The check ${run.status || "failed"}.`;
+  const output = $("[data-error-output]", errorDialog);
+  if (run.output) {
+    output.hidden = false;
+    output.textContent = run.output;
+  } else {
+    output.hidden = true;
+    output.textContent = "";
+  }
+}
+
+async function openRunError(run) {
+  fillErrorDialog(run);
+  errorDialog.show();
+  if (!run.id) return;
+  try {
+    fillErrorDialog(await api("GET", `/api/runs/${run.id}`));
+  } catch (error) {
+    $("[data-error-message]", errorDialog).textContent = error.message;
+  }
+}
+
 function runStatusBadge(run) {
   const outcome = run.result?.outcome;
   if (outcome) {
-    const kind = outcome === "available" ? "ok" : outcome === "error" ? "bad" : "muted";
+    const kind = outcome === "available" ? "ok" : outcome === "error" ? "bad" : outcome === "none" ? "idle" : "muted";
     return badge(outcomeLabel(outcome), kind);
   }
   const kind = run.status === "success" ? "ok" : run.status === "running" ? "info" : run.status === "cancelled" ? "muted" : "bad";

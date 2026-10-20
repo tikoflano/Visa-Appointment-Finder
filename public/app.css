@@ -76,10 +76,9 @@ h1 {
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
   padding: 22px 28px 24px;
 }
 
@@ -95,6 +94,8 @@ h1 {
   height: 48px;
   border-radius: 13px;
   flex-shrink: 0;
+  overflow: hidden;
+  display: block;
   box-shadow:
     0 10px 24px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
@@ -121,6 +122,8 @@ h1 {
 
 .hero .toolbar {
   gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .hero .toolbar sl-icon-button {
@@ -320,8 +323,19 @@ td sl-badge {
   margin: 0 4px 2px 0;
 }
 
+sl-badge.idle-badge::part(base) {
+  background: #c5d4e8;
+  color: #2f4560;
+}
+
 .clickable-badge {
   cursor: pointer;
+}
+
+.error-detail {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .clamp {
@@ -449,14 +463,8 @@ pre[data-output] {
 
 @media (max-width: 720px) {
   .hero-inner {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 18px 20px 20px;
-  }
-
-  .hero .toolbar {
-    width: 100%;
     flex-wrap: wrap;
+    padding: 18px 20px 20px;
   }
 
   main {
