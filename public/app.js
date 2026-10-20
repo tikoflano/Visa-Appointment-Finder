@@ -70,14 +70,28 @@ function relativeTime(iso) {
   return `${Math.round(minutes / 60 / 24)}d ago`;
 }
 
+function liveBookedDate(label, stored) {
+  const tip = stored
+    ? "Uses the appointment currently booked on AIS. This date can change after a check or reschedule."
+    : "No booked date stored yet. A successful check will fill this in, and it can change later.";
+  return el(
+    "sl-tooltip",
+    { placement: "top", hoist: true },
+    el("span", { slot: "content" }, tip),
+    el("span", { class: "date-live", tabindex: "0" }, label),
+  );
+}
+
 function dateWindow(profile) {
-  const booked = profile.currentAppointmentDate
-    ? formatDate(profile.currentAppointmentDate)
-    : "booked";
+  const stored = !!profile.currentAppointmentDate;
+  const booked = stored ? formatDate(profile.currentAppointmentDate) : "booked";
   if (!profile.minDate && !profile.maxDate) {
-    return profile.currentAppointmentDate ? `before ${booked}` : "before booked";
+    return el("span", {}, "before ", liveBookedDate(booked, stored));
   }
-  return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate) || booked}`;
+  if (profile.maxDate) {
+    return `${formatDate(profile.minDate) || "…"} – ${formatDate(profile.maxDate)}`;
+  }
+  return el("span", {}, `${formatDate(profile.minDate) || "…"} – `, liveBookedDate(booked, stored));
 }
 
 function badge(text, kind) {
@@ -140,10 +154,14 @@ async function boot() {
 function showLogin(setupRequired) {
   clearInterval(refreshTimer);
   $("#app-view").hidden = true;
+  $("#app-toolbar").hidden = true;
   $("#login-view").hidden = false;
+  document.body.classList.add("is-login");
+  document.body.classList.remove("is-app");
   setupMode = !!setupRequired;
   $("#setup-hint").hidden = !setupMode;
   $("#confirm-row").hidden = !setupMode;
+  $(".login-title").textContent = setupMode ? "Create password" : "Sign in";
   $("#login-submit").textContent = setupMode ? "Create password" : "Sign in";
   const form = $("#login-form");
   named(form, "password").autocomplete = setupMode ? "new-password" : "current-password";
@@ -153,6 +171,9 @@ function showLogin(setupRequired) {
 function showApp(dev) {
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
+  $("#app-toolbar").hidden = false;
+  document.body.classList.add("is-app");
+  document.body.classList.remove("is-login");
   setBanner("#dev-banner", !!dev);
   refresh();
   clearInterval(refreshTimer);
@@ -267,14 +288,20 @@ function renderProfiles() {
         { class: profile.enabled ? "" : "disabled" },
         el("td", { class: "col-enabled" }, enableSwitch(profile)),
         el("td", {}, el("strong", {}, profile.name), el("div", { class: "sub" }, profile.visaEmail)),
-        el("td", { class: "mono nowrap" }, profile.visaProcessId),
+        el(
+          "td",
+          { class: "nowrap" },
+          profile.currentAppointmentDate
+            ? formatDate(profile.currentAppointmentDate)
+            : el("span", { class: "hint" }, "unknown"),
+        ),
         el("td", { class: "nowrap" }, dateWindow(profile)),
         el(
           "td",
           {},
           profile.actions.length
             ? profile.actions.map((action) =>
-                badge(action, action === "reschedule" ? "warn" : "muted"),
+                badge(action, action === "reschedule" ? "ok" : action === "notify" ? "warn" : "muted"),
               )
             : badge("none", "muted"),
         ),

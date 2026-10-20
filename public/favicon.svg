@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Visa Appointment Finder">
+  <defs>
+    <linearGradient id="mark-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b1738"/>
+      <stop offset=".55" stop-color="#1a3d9c"/>
+      <stop offset="1" stop-color="#4d7cff"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#mark-bg)"/>
+  <rect x="14" y="16" width="36" height="34" rx="6" fill="#fff"/>
+  <path fill="#f0c14b" d="M20 16h24a6 6 0 0 1 6 6v4H14v-4a6 6 0 0 1 6-6z"/>
+  <rect x="22" y="12" width="4.5" height="10" rx="2.25" fill="#d4a017"/>
+  <rect x="37.5" y="12" width="4.5" height="10" rx="2.25" fill="#d4a017"/>
+  <g fill="#d5dbe8">
+    <rect x="20" y="32" width="6" height="6" rx="1.5"/>
+    <rect x="29" y="32" width="6" height="6" rx="1.5"/>
+    <rect x="38" y="32" width="6" height="6" rx="1.5"/>
+    <rect x="20" y="41" width="6" height="6" rx="1.5"/>
+    <rect x="29" y="41" width="6" height="6" rx="1.5"/>
+  </g>
+  <rect x="38" y="41" width="6" height="6" rx="1.5" fill="#2457d6"/>
+</svg>

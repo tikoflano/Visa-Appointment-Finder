@@ -3,14 +3,44 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#16357a" />
     <title>Visa Appointment Finder</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <script type="module" src="./app.js" data-shoelace="/shoelace"></script>
   </head>
   <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <div class="brand">
+          <img class="brand-mark" src="./favicon.svg" width="48" height="48" alt="" />
+          <div class="brand-copy">
+            <p class="brand-kicker">AIS · Chile</p>
+            <h1>Visa Appointment Finder</h1>
+            <p class="brand-tagline">Catch earlier dates at the Santiago consulate</p>
+          </div>
+        </div>
+        <div class="toolbar" id="app-toolbar" hidden>
+          <sl-tooltip placement="bottom" hoist>
+            <span slot="content">New profile</span>
+            <sl-icon-button id="new-profile" class="hero-action add" name="person-plus-fill" label="New profile"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Settings</span>
+            <sl-icon-button id="open-settings" class="hero-action settings" name="gear-fill" label="Settings"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Sign out</span>
+            <sl-icon-button id="logout" class="hero-action sign-out" name="box-arrow-right" label="Sign out"></sl-icon-button>
+          </sl-tooltip>
+        </div>
+      </div>
+    </header>
+
+    <main>
     <section id="login-view" hidden>
       <sl-card class="login">
         <form id="login-form">
-          <h1>Visa Appointment Finder</h1>
+          <h2 class="login-title">Sign in</h2>
           <p id="setup-hint" class="hint" hidden>
             Choose an admin password (at least 10 characters) to protect this UI.
           </p>
@@ -37,15 +67,6 @@
     </section>
 
     <section id="app-view" hidden>
-      <header>
-        <h1>Visa Appointment Finder</h1>
-        <div class="toolbar">
-          <sl-button id="new-profile" variant="primary">New profile</sl-button>
-          <sl-button id="open-settings">Settings</sl-button>
-          <sl-button id="logout">Sign out</sl-button>
-        </div>
-      </header>
-
       <sl-alert id="dev-banner" variant="warning" hidden>
         Dev mode: login is skipped and the scheduler is off. The Docker container on port 3000 is unchanged.
       </sl-alert>
@@ -59,7 +80,7 @@
           <tr>
             <th class="col-enabled">On</th>
             <th>Name</th>
-            <th>Process</th>
+            <th>Current appointment</th>
             <th>Date window</th>
             <th>Actions</th>
             <th>Result</th>
@@ -74,6 +95,7 @@
         No profiles yet. Click <strong>New profile</strong> to add one.
       </p>
     </section>
+    </main>
 
     <sl-dialog id="profile-dialog" label="Profile">
       <form id="profile-form">
