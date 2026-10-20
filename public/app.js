@@ -86,6 +86,24 @@ function relativeTime(iso) {
   return `${Math.round(minutes / 60 / 24)}d ago`;
 }
 
+function nextRunLabel(iso) {
+  if (!iso) return "—";
+  const minutes = Math.round((new Date(iso) - Date.now()) / 60000);
+  if (minutes <= 0) return "due";
+  if (minutes < 60) return `in ${minutes}m`;
+  if (minutes < 60 * 24) return `in ${Math.round(minutes / 60)}h`;
+  return `in ${Math.round(minutes / 60 / 24)}d`;
+}
+
+function sortedProfiles() {
+  return [...profiles].sort((left, right) => {
+    const leftAt = left.nextRunAt ? Date.parse(left.nextRunAt) : Number.POSITIVE_INFINITY;
+    const rightAt = right.nextRunAt ? Date.parse(right.nextRunAt) : Number.POSITIVE_INFINITY;
+    if (leftAt !== rightAt) return leftAt - rightAt;
+    return String(left.name || "").localeCompare(String(right.name || ""));
+  });
+}
+
 function liveBookedDate(label, stored) {
   const tip = stored
     ? "Uses the appointment currently booked on AIS. This date can change after a check or reschedule."
@@ -390,8 +408,9 @@ function enableSwitch(profile) {
 function renderProfiles() {
   const tbody = $("#profile-rows");
   tbody.replaceChildren(
-    ...profiles.map((profile) => {
+    ...sortedProfiles().map((profile) => {
       const busy = profile.state !== "idle";
+      const nextLabel = nextRunLabel(profile.nextRunAt);
 
       return el(
         "tr",
@@ -418,6 +437,16 @@ function renderProfiles() {
           "td",
           { class: "nowrap hint", title: formatTimestamp(profile.lastRun?.startedAt) },
           relativeTime(profile.lastRun?.startedAt),
+        ),
+        el(
+          "td",
+          {
+            class: nextLabel === "due" ? "nowrap" : "nowrap hint",
+            title: profile.nextRunAt
+              ? formatTimestamp(profile.nextRunAt)
+              : "Disabled — not scheduled",
+          },
+          nextLabel,
         ),
         el(
           "td",

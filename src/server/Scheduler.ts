@@ -75,6 +75,22 @@ export class Scheduler {
   }
 
   /**
+   * When this enabled profile is next due: last run start + Check every.
+   * Never-run profiles are due immediately. Disabled profiles have no next run.
+   */
+  static nextRunAt(
+    enabled: boolean,
+    lastStartedAt: string | null | undefined,
+    intervalMs: number,
+    now = Date.now(),
+  ): string | null {
+    if (!enabled) return null;
+    const started = lastStartedAt ? Date.parse(lastStartedAt) : NaN;
+    if (!Number.isFinite(started)) return new Date(now).toISOString();
+    return new Date(started + intervalMs).toISOString();
+  }
+
+  /**
    * True when this profile is occupying the queue longer than the check
    * interval: still running past intervalMinutes, or waiting in queue that long.
    */

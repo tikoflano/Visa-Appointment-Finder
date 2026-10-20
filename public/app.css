@@ -300,7 +300,7 @@ table {
 
 table.profiles {
   background: var(--card);
-  min-width: 62rem;
+  min-width: 70rem;
 }
 
 th,

@@ -153,12 +153,13 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, and icon actions (run/stop, runs, edit, delete).
+The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and icon actions (run/stop, runs, edit, delete). Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last.
 
 - **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, settings, sign out).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Enable is refused if the date window overlaps another enabled profile (notify included — two people should not hunt the same days). An empty latest date needs a stored booked appointment from a prior run, or set a latest date.
 - **Date window** — if latest is empty, the end of the window is the current booked date (dashed link, tooltip). That date can change after a check or reschedule.
 - **Run now / Stop** — start or cancel a check immediately.
+- **Next run** — last run **start** plus **Check every**. **due** means that time has already passed (or the profile has never run). Disabled profiles show —. `./run.sh dev` still shows this time but does not start scheduled checks.
 - **Result** — **none available** is a slate chip (checked, nothing matched), distinct from gray **never run**. **available** is clickable and lists matching dates. **error** / **failed** / **timeout** open a dialog with the error text (same details as expanding that run).
 - **Runs** — history for that profile. Opens on the **last 24 hours**. Filter by from/to datetime and **notified**; sort newest or oldest first. A line above the list shows first and last notification in that range. A green/red bar is the mix of succeeded vs errored checks. Click a row to expand booked appointment, dates, notified, rescheduled, and error text (the outcome badge is already on the row). The list is **not paginated**: 100 runs, or 500 when a filter is on (API cap 500). Older rows past that cap are omitted; SQLite still prunes runs after 14 days.
 - **Settings** — Gmail sender, admin notification emails, check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, failure alarm (default 3 consecutive errors), bot debug output.

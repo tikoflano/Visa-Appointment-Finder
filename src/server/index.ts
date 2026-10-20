@@ -282,6 +282,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
             ...profile,
             state: scheduler.getState(profile.id),
             lastRun,
+            nextRunAt: Scheduler.nextRunAt(
+              profile.enabled,
+              lastRun?.startedAt,
+              intervalMs,
+            ),
             behind: lag.behind,
             behindMs: lag.elapsedMs,
           };
