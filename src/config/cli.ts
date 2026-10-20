@@ -36,7 +36,8 @@ export function parseCliArgs(): Config {
       heartbeat: {
         type: "boolean",
         alias: "hb",
-        describe: "Enable heartbeat notifications",
+        describe:
+          "Send a heartbeat after a successful run. Only for a bot started by hand; the UI scheduler sends heartbeats itself.",
         default: false,
       },
     })

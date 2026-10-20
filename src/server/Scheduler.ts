@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from "child_process";
 import path from "path";
+import { sendHeartbeat } from "./heartbeat";
 import { Profile, RunStatus, Store } from "./Store";
 
 const TICK_MS = 15 * 1000;
@@ -28,6 +29,7 @@ export class Scheduler {
   private draining: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private lastPrune = 0;
+  private heartbeatInFlight = false;
 
   constructor(store: Store) {
     this.store = store;
@@ -104,6 +106,19 @@ export class Scheduler {
     } catch (error) {
       console.error("Scheduler tick failed:", error);
     }
+    void this.maybeHeartbeat();
+  }
+
+  private async maybeHeartbeat(): Promise<void> {
+    if (this.heartbeatInFlight) return;
+    this.heartbeatInFlight = true;
+    try {
+      await sendHeartbeat(this.store);
+    } catch (error) {
+      console.error("Heartbeat failed:", error);
+    } finally {
+      this.heartbeatInFlight = false;
+    }
   }
 
   // Serialized so concurrent callers can't exceed the concurrency limit while
@@ -137,7 +152,7 @@ export class Scheduler {
     }
 
     const { runTimeoutMinutes } = await this.store.getSettings();
-    const child = spawn(process.execPath, this.buildArgs(profile, env), {
+    const child = spawn(process.execPath, this.buildArgs(profile), {
       env,
       cwd: path.resolve(__dirname, "..", ".."),
       stdio: ["ignore", "pipe", "pipe"],
@@ -202,13 +217,10 @@ export class Scheduler {
       EMAIL_ADMIN_DESTINATION: settings.emailAdminDestination,
       GMAIL_APP_USER: settings.gmailUser,
       GMAIL_APP_PASSWORD: await this.store.getGmailAppPassword(),
-      HEARTBEAT_TIME: String(settings.heartbeatMinutes),
-      HEARTBEAT_DESTINATION: settings.emailAdminDestination,
-      HEARTBEAT_ENABLED: settings.heartbeatEnabled ? "1" : "0",
     };
   }
 
-  private buildArgs(profile: Profile, env: NodeJS.ProcessEnv): string[] {
+  private buildArgs(profile: Profile): string[] {
     const args = [RUNNER_PATH, "--headless"];
     for (const action of profile.actions) {
       args.push(`--action=${action}`);
@@ -216,15 +228,6 @@ export class Scheduler {
     // The runner accepts YYYY-MM-DD as well as MM/DD/YYYY.
     if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
     if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
-    // The runner throws when heartbeat is requested without a destination,
-    // which would turn every successful run into a failure.
-    if (
-      env.HEARTBEAT_ENABLED === "1" &&
-      env.HEARTBEAT_DESTINATION &&
-      env.GMAIL_APP_USER
-    ) {
-      args.push("--heartbeat");
-    }
     return args;
   }
 

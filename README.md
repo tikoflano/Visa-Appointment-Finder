@@ -22,7 +22,7 @@ One long-running process serves a local admin UI, stores every account in SQLite
 5. That child logs into ais.usvisa-info.com, searches for dates, optionally emails and/or reschedules, writes to the `log` table, then exits.
 6. At most **Max concurrent runs** (default 2) children run at once. Extra due profiles wait in a queue. A run that exceeds **Run timeout** is killed.
 
-The child does not read env files. The scheduler decrypts the visa password and Gmail app password, then injects `VISA_*` / `GMAIL_*` / `EMAIL_*` / `HEARTBEAT_*` into that process. The master key is not passed to children.
+The child does not read env files. The scheduler decrypts the visa password and Gmail app password, then injects `VISA_*` / `GMAIL_*` / `EMAIL_*` into that process. The master key is not passed to children.
 
 ## Data on disk
 
@@ -154,7 +154,7 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 **Reschedule** books the first matching date without asking.
 
-**Heartbeat** is a Settings toggle. After any successful check, it emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes). Concurrent profiles share that one email so you get a single daily ping, not one per account. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately.
+**Heartbeat** is a Settings toggle. The scheduler emails the admin notification addresses at most once per heartbeat interval (default 1440 minutes), even if no profile ran or every run failed. The email lists enabled profiles and whether at least one of the last 5 runs succeeded; if none did, the subject flags that an admin needs to check. Settings shows when the last heartbeat was sent and has **Send now** to force one immediately. `./run.sh dev` turns the scheduler off, so automatic heartbeats do not fire there. The bot `--heartbeat` flag is only for a check run by hand outside Docker.
 
 To send mail you need a Gmail **App Password**:
 
