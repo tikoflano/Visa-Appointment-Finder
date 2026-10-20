@@ -171,8 +171,6 @@
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
       <div slot="footer" class="dialog-actions">
-        <sl-button variant="danger" data-delete>Delete</sl-button>
-        <span class="spacer"></span>
         <sl-button data-close>Cancel</sl-button>
         <sl-button variant="primary" type="submit" form="profile-form">Save</sl-button>
       </div>
@@ -275,7 +273,6 @@
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
       <div slot="footer" class="dialog-actions">
-        <span class="spacer"></span>
         <sl-button data-close>Cancel</sl-button>
         <sl-button variant="primary" type="submit" form="settings-form">Save</sl-button>
       </div>
@@ -310,25 +307,33 @@
       <div class="runs-wrap">
         <table class="logs"><tbody data-runs></tbody></table>
       </div>
-      <sl-button slot="footer" data-close>Close</sl-button>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
     </sl-dialog>
 
     <sl-dialog id="dates-dialog" label="Available dates">
       <ul class="date-list" data-dates></ul>
-      <sl-button slot="footer" data-close>Close</sl-button>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
     </sl-dialog>
 
     <sl-dialog id="error-dialog" label="Error">
       <p class="sub" data-error-when></p>
       <p class="error-detail" data-error-message></p>
       <pre class="run-debug" data-error-output hidden></pre>
-      <sl-button slot="footer" data-close>Close</sl-button>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
     </sl-dialog>
 
     <sl-dialog id="confirm-dialog" label="Confirm">
       <p data-message></p>
-      <sl-button slot="footer" data-confirm-no>Cancel</sl-button>
-      <sl-button slot="footer" variant="primary" data-confirm-yes>Continue</sl-button>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-confirm-no>Cancel</sl-button>
+        <sl-button variant="primary" data-confirm-yes>Continue</sl-button>
+      </div>
     </sl-dialog>
   </body>
 </html>

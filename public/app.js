@@ -426,10 +426,11 @@ function renderProfiles() {
             "div",
             { class: "row-actions" },
             busy
-              ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action danger")
-              : iconAction("play-circle", "Run now", () => runNow(profile)),
-            iconAction("clock-history", "Runs", () => openRuns(profile)),
-            iconAction("pencil", "Edit", () => openProfile(profile)),
+              ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action stop")
+              : iconAction("play-circle", "Run now", () => runNow(profile), "row-action play"),
+            iconAction("clock-history", "Runs", () => openRuns(profile), "row-action history"),
+            iconAction("pencil", "Edit", () => openProfile(profile), "row-action edit"),
+            iconAction("trash", "Delete", () => deleteProfile(profile), "row-action danger"),
           ),
         ),
       );
@@ -461,6 +462,23 @@ async function cancelRun(profile) {
   refresh();
 }
 
+async function deleteProfile(profile) {
+  if (
+    !(await confirmAction(`Delete profile "${profile.name}"? Its stored password will be removed.`, {
+      okLabel: "Delete",
+      variant: "danger",
+    }))
+  ) {
+    return;
+  }
+  try {
+    await api("DELETE", `/api/profiles/${profile.id}`, {});
+    refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function actionCheckboxes(form) {
   return [...form.querySelectorAll("sl-checkbox[name=action]")];
 }
@@ -476,7 +494,6 @@ function openProfile(profile) {
   profileForm.reset();
   setError(profileForm);
   profileDialog.label = profile ? `Edit ${profile.name}` : "New profile";
-  $("[data-delete]").hidden = !profile;
 
   const values = profile || {
     actions: ["notify"],
@@ -536,25 +553,6 @@ profileForm.addEventListener("submit", async (event) => {
     } else {
       await api("POST", "/api/profiles", body);
     }
-    profileDialog.hide();
-    refresh();
-  } catch (error) {
-    setError(profileForm, error.message);
-  }
-});
-
-$("[data-delete]").addEventListener("click", async () => {
-  if (
-    !editingProfile ||
-    !(await confirmAction(`Delete profile "${editingProfile.name}"? Its stored password will be removed.`, {
-      okLabel: "Delete",
-      variant: "danger",
-    }))
-  ) {
-    return;
-  }
-  try {
-    await api("DELETE", `/api/profiles/${editingProfile.id}`, {});
     profileDialog.hide();
     refresh();
   } catch (error) {

@@ -153,7 +153,7 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, and icon actions (run/stop, runs, edit).
+The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, and icon actions (run/stop, runs, edit, delete).
 
 - **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, settings, sign out).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Enable is refused if the date window overlaps another enabled profile (notify included — two people should not hunt the same days). An empty latest date needs a stored booked appointment from a prior run, or set a latest date.
