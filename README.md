@@ -149,6 +149,8 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 `--rebuild` ignores the hash and always builds. The first start after this hashing was added will rebuild once, because older images have no `visa.source_hash` label.
 
+`docker build` still reuses layers. `npm ci` and Playwright Chromium only rerun when `package.json` / `package-lock.json` (or the Dockerfile) change. Edits under `src/` or `public/` reuse those layers and only copy sources and `npm run build` again. The old `apt-get install chromium` step is gone: Playwright downloads its own browser (`npx playwright install --with-deps chromium`).
+
 ## Using the UI
 
 The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, and icon actions (run/stop, runs, edit).
