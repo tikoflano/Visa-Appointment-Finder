@@ -62,13 +62,13 @@ source_hash() {
   (
     cd "$BASE_DIR"
     {
-      printf 'v1\n'
-      for f in Dockerfile .dockerignore package.json package-lock.json tsconfig.json; do
+      printf 'v2\n'
+      for f in Dockerfile .dockerignore package.json package-lock.json tsconfig.json vite.config.mjs; do
         if [ -f "$f" ]; then
           sha256sum "$f"
         fi
       done
-      find src -type f -print0 | sort -z | xargs -0 sha256sum
+      find src public -type f -print0 | sort -z | xargs -0 sha256sum
     } | sha256sum | awk '{print $1}'
   )
 }
@@ -117,7 +117,6 @@ docker_base=(
   -e "TZ=$(cat /etc/timezone 2>/dev/null || echo UTC)"
   -e HOST=0.0.0.0
   -e PORT=3000
-  -e "PUBLIC_DIR=$CONTAINER_HOST/public"
   -e "COOKIE_SECURE=${COOKIE_SECURE:-}"
   --shm-size=1g
   -p "$HOST_BIND:$PORT:3000"
@@ -176,7 +175,7 @@ if [ "${1:-}" = "dev" ]; then
   npx tsc
   echo "Dev UI (HMR): http://127.0.0.1:$vite_port"
   echo "API:          http://127.0.0.1:$api_port  (proxied by Vite)"
-  echo "CSS hot-reloads. JS/HTML reload the page. TypeScript restarts the API process."
+  echo "Open the Vite URL above — not :3000. CSS and JS update in the browser without a refresh."
   echo "Login skipped, scheduler off. Production visa-ui on :3000 is left running."
   npx tsc --watch --preserveWatchOutput --pretty false &
   tsc_pid=$!

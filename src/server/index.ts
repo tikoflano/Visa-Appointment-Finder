@@ -16,13 +16,43 @@ const DEV =
   process.env.VISA_DEV === "1" || process.env.VISA_DEV === "true";
 
 const PUBLIC_DIR = path.resolve(
-  process.env.PUBLIC_DIR || path.join(__dirname, "..", "..", "public"),
+  process.env.PUBLIC_DIR || path.join(__dirname, "..", "ui"),
 );
-const STATIC_FILES: Record<string, [string, string]> = {
-  "/": ["index.html", "text/html; charset=utf-8"],
-  "/app.js": ["app.js", "text/javascript; charset=utf-8"],
-  "/app.css": ["app.css", "text/css; charset=utf-8"],
+const MIME_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
 };
+
+function resolvePublicFile(
+  pathname: string,
+): { abs: string; type: string } | undefined {
+  const decoded = decodeURIComponent(pathname);
+  if (!decoded.startsWith("/") || decoded.includes("\0")) return undefined;
+  const relative = decoded === "/" ? "/index.html" : decoded;
+  const abs = path.resolve(PUBLIC_DIR, `.${relative}`);
+  const root = path.resolve(PUBLIC_DIR) + path.sep;
+  if (abs !== path.resolve(PUBLIC_DIR) && !abs.startsWith(root)) {
+    return undefined;
+  }
+  try {
+    if (!fs.statSync(abs).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return {
+    abs,
+    type: MIME_TYPES[path.extname(abs).toLowerCase()] || "application/octet-stream",
+  };
+}
 
 class HttpError extends Error {
   constructor(
@@ -314,14 +344,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const url = new URL(req.url || "/", "http://localhost");
 
     try {
-      const staticFile = req.method === "GET" && STATIC_FILES[url.pathname];
+      const staticFile =
+        req.method === "GET" &&
+        !url.pathname.startsWith("/api/") &&
+        resolvePublicFile(url.pathname);
       if (staticFile) {
-        const [file, contentType] = staticFile;
         return send(
           res,
           200,
-          await fs.promises.readFile(path.join(PUBLIC_DIR, file)),
-          contentType,
+          await fs.promises.readFile(staticFile.abs),
+          staticFile.type,
         );
       }
 

@@ -5,6 +5,8 @@
   --muted: #6b7385;
   --border: #dde1e8;
   --primary: #2457d6;
+  --sl-color-primary-500: var(--primary);
+  --sl-color-primary-600: var(--primary);
   --ok: #1d7a46;
   --bad: #b42318;
   --warn: #a15c07;
@@ -189,6 +191,20 @@ th {
 
 tr.disabled td:not(:first-child):not(:last-child) {
   opacity: 0.55;
+}
+
+table.profiles th.col-enabled,
+table.profiles td.col-enabled {
+  width: 1%;
+  text-align: center;
+  padding-left: 10px;
+  padding-right: 8px;
+  white-space: nowrap;
+}
+
+td.col-enabled sl-switch {
+  font-size: 15px;
+  vertical-align: middle;
 }
 
 table.profiles th:last-child,

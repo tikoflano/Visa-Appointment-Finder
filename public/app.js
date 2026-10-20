@@ -1,4 +1,6 @@
-"use strict";
+import "@shoelace-style/shoelace/dist/themes/light.css";
+import "@shoelace-style/shoelace/dist/components/switch/switch.js";
+import "./app.css";
 
 const REFRESH_MS = 10000;
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -148,6 +150,21 @@ function runBadge(profile) {
   return badge(run.status, kind);
 }
 
+function enableSwitch(profile) {
+  const toggle = document.createElement("sl-switch");
+  toggle.size = "small";
+  toggle.checked = !!profile.enabled;
+  toggle.title = profile.enabled ? "Disable" : "Enable";
+  toggle.setAttribute(
+    "aria-label",
+    profile.enabled ? "Disable profile" : "Enable profile",
+  );
+  toggle.addEventListener("sl-change", (event) => {
+    toggleEnabled(profile, event.target.checked);
+  });
+  return toggle;
+}
+
 function renderProfiles() {
   const tbody = $("#profile-rows");
   tbody.replaceChildren(
@@ -163,13 +180,8 @@ function renderProfiles() {
         { class: profile.enabled ? "" : "disabled" },
         el(
           "td",
-          {},
-          el("input", {
-            type: "checkbox",
-            checked: profile.enabled,
-            title: profile.enabled ? "Disable" : "Enable",
-            onchange: (event) => toggleEnabled(profile, event.target.checked),
-          }),
+          { class: "col-enabled" },
+          enableSwitch(profile),
         ),
         el("td", {}, el("strong", {}, profile.name), el("div", { class: "sub" }, profile.visaEmail)),
         el("td", { class: "mono nowrap" }, profile.visaProcessId),

@@ -96,7 +96,7 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
 | `./run.sh --rebuild --foreground` | Force-rebuild, then run attached. Flag order does not matter. |
-| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. No Docker rebuild. CSS updates in place; JS/HTML reload the page. Skips login and does not start the scheduler, so it will not double-run bots next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
+| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. Open **5173**, not the production UI on :3000. CSS and JS update in the browser without a refresh. Skips login and does not start the scheduler, so it will not double-run bots next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
 | `./run.sh logs` | Follow `visa-ui` logs (`docker logs -f`). Ctrl+C only leaves the log stream; the container keeps running. |
 | `./run.sh stop` | Stop and remove `visa-ui`. Scheduled checks stop too. |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
@@ -135,10 +135,10 @@ Included in the hash:
 - `Dockerfile`
 - `.dockerignore`
 - `package.json`, `package-lock.json`
-- `tsconfig.json`
-- everything under `src/`
+- `tsconfig.json`, `vite.config.mjs`
+- everything under `src/` and `public/`
 
-Not included: `public/` (HTML/CSS/JS are served from the bind-mounted project dir, so a refresh is enough), `README.md`, `db.sqlite`, `secrets/`, and other host-only files. Changing the README or UI files does not rebuild.
+Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. Changing the README does not rebuild.
 
 `--rebuild` ignores the hash and always builds. The first start after this hashing was added will rebuild once, because older images have no `visa.source_hash` label.
 
@@ -193,7 +193,7 @@ sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"
 | --- | --- | --- |
 | `VISA_MASTER_KEY_FILE` | `secrets/master.key` | 32-byte base64 master key |
 | `DB_PATH` | `./db.sqlite` | SQLite database |
-| `PUBLIC_DIR` | `public/` next to `build/` | Directory of HTML/CSS/JS. Docker sets this to the bind-mounted project `public/` |
+| `PUBLIC_DIR` | `build/ui` | Vite production build of the admin UI. `./run.sh dev` still points this at `public/` for the API process; the browser should use Vite on :5173 |
 | `VISA_DEV` | unset | Set `1` for `./run.sh dev`: skip login, do not start the scheduler. Refused unless `HOST` is localhost |
 | `HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address the Node server binds |
 | `PORT` | `3000` | Listen port inside the process (Docker / `npm start`) |
@@ -206,7 +206,7 @@ sqlite3 db.sqlite "SELECT * FROM log ORDER BY id DESC LIMIT 10;"
 
 | Script | What it does |
 | --- | --- |
-| `npm run build` | Compile TypeScript to `build/` |
+| `npm run build` | Compile TypeScript to `build/` and bundle the UI into `build/ui` |
 | `npm start` | Run the management server (needs key + DB) |
 | `npm run dev` | Same as `./run.sh dev` |
 | `npm run cli -- dump` | Same as `./run.sh dump` |
