@@ -384,7 +384,7 @@ sl-badge.idle-badge::part(base) {
 }
 
 sl-dialog {
-  --header-spacing: 16px 22px;
+  --header-spacing: 16px;
   --body-spacing: 22px 24px 20px;
   --footer-spacing: 14px 20px;
 }
@@ -407,6 +407,7 @@ sl-dialog.wide-dialog::part(panel) {
 }
 
 sl-dialog::part(header) {
+  align-items: center;
   background:
     radial-gradient(420px 90px at 100% -30%, rgba(110, 160, 255, 0.5), transparent 62%),
     linear-gradient(112deg, #0b1738 0%, #16357a 62%, #2457d6 100%);
@@ -420,15 +421,34 @@ sl-dialog::part(title) {
   font-weight: 650;
   letter-spacing: -0.02em;
   line-height: 1.25;
+  padding: 16px 22px;
+}
+
+sl-dialog::part(header-actions) {
+  align-items: center;
+  padding: 0 14px 0 0;
 }
 
 sl-dialog::part(close-button) {
   color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+}
+
+sl-dialog::part(close-button__base) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2em;
+  height: 2em;
+  min-width: 2em;
+  min-height: 2em;
+  padding: 0;
+  border-radius: 50%;
 }
 
 sl-dialog::part(close-button__base):hover,
 sl-dialog::part(close-button__base):focus-visible {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
 
