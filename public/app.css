@@ -702,6 +702,7 @@ pre[data-output] {
   line-height: 1.25;
   border-radius: 4px;
   padding: 2px 5px;
+  background: var(--chip-color);
   color: #fff;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -710,9 +711,20 @@ pre[data-output] {
 
 .calendar-chip.booked {
   background: transparent;
-  border: 1px dashed currentColor;
-  color: inherit;
+  border: 1px dashed var(--chip-color);
+  color: var(--chip-color);
 }
+
+.tone-0 { --chip-color: #2457d6; }
+.tone-1 { --chip-color: #0f766e; }
+.tone-2 { --chip-color: #a15c07; }
+.tone-3 { --chip-color: #7c3aed; }
+.tone-4 { --chip-color: #b42318; }
+.tone-5 { --chip-color: #1d4ed8; }
+.tone-6 { --chip-color: #c2410c; }
+.tone-7 { --chip-color: #be185d; }
+.tone-8 { --chip-color: #365314; }
+.tone-9 { --chip-color: #0369a1; }
 
 .calendar-legend {
   display: flex;
@@ -733,6 +745,7 @@ pre[data-output] {
   height: 12px;
   border-radius: 3px;
   flex: 0 0 auto;
+  background: var(--chip-color);
 }
 
 .calendar-legend-meta {

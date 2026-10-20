@@ -1,4 +1,4 @@
-import "./shoelace-base.js";
+import { registerSystemIconsFromSelf } from "./shoelace-base.js";
 import "@shoelace-style/shoelace/dist/themes/light.css";
 import "@shoelace-style/shoelace/dist/components/alert/alert.js";
 import "@shoelace-style/shoelace/dist/components/badge/badge.js";
@@ -13,6 +13,8 @@ import "@shoelace-style/shoelace/dist/components/select/select.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
+
+registerSystemIconsFromSelf();
 
 const REFRESH_MS = 10000;
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1213,8 +1215,12 @@ const PROFILE_COLORS = [
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 let calendarCursor = { year: new Date().getFullYear(), month: new Date().getMonth() };
 
-function profileColor(id) {
-  return PROFILE_COLORS[Math.abs(Number(id) || 0) % PROFILE_COLORS.length];
+function profileColorIndex(id) {
+  return Math.abs(Number(id) || 0) % PROFILE_COLORS.length;
+}
+
+function chipClass(id, extra = "") {
+  return `calendar-chip tone-${profileColorIndex(id)}${extra ? ` ${extra}` : ""}`;
 }
 
 function addIsoDays(iso, days) {
@@ -1294,14 +1300,12 @@ function renderCalendar() {
     const chips = [];
     for (const profile of enabled) {
       const range = ranges.get(profile.id);
-      const color = profileColor(profile.id);
       if (isoInWindow(cell.iso, range)) {
         chips.push(
           el(
             "span",
             {
-              class: "calendar-chip",
-              style: `background:${color}`,
+              class: chipClass(profile.id),
               title: `${profile.name}: searching ${windowLabel(range)}`,
             },
             profile.name,
@@ -1313,8 +1317,7 @@ function renderCalendar() {
           el(
             "span",
             {
-              class: "calendar-chip booked",
-              style: `color:${color}; border-color:${color}`,
+              class: chipClass(profile.id, "booked"),
               title: `${profile.name}: booked appointment`,
             },
             `${profile.name} booked`,
@@ -1346,7 +1349,7 @@ function renderCalendar() {
       return el(
         "div",
         { class: "calendar-legend-item" },
-        el("span", { class: "calendar-legend-swatch", style: `background:${profileColor(profile.id)}` }),
+        el("span", { class: `calendar-legend-swatch tone-${profileColorIndex(profile.id)}` }),
         el(
           "span",
           {},
