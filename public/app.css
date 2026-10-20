@@ -49,6 +49,26 @@ header {
 
 .row-actions {
   flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.row-actions sl-icon-button {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.row-actions sl-icon-button:hover,
+.row-actions sl-icon-button:focus-visible {
+  color: var(--primary);
+}
+
+.row-actions sl-icon-button.danger {
+  color: var(--bad);
+}
+
+.row-actions sl-icon-button.danger:hover,
+.row-actions sl-icon-button.danger:focus-visible {
+  color: var(--bad);
 }
 
 .label-text {

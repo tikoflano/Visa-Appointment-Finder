@@ -232,6 +232,15 @@ function runBadge(profile) {
   return badge(run.status, kind);
 }
 
+function iconAction(name, label, onclick, className) {
+  return el(
+    "sl-tooltip",
+    { placement: "top", hoist: true },
+    el("span", { slot: "content" }, label),
+    el("sl-icon-button", { name, label, class: className || "row-action", onclick }),
+  );
+}
+
 function enableSwitch(profile) {
   const toggle = document.createElement("sl-switch");
   toggle.size = "small";
@@ -282,10 +291,10 @@ function renderProfiles() {
             "div",
             { class: "row-actions" },
             busy
-              ? el("sl-button", { size: "small", variant: "danger", onclick: () => cancelRun(profile) }, "Stop")
-              : el("sl-button", { size: "small", onclick: () => runNow(profile) }, "Run now"),
-            el("sl-button", { size: "small", onclick: () => openRuns(profile) }, "Runs"),
-            el("sl-button", { size: "small", onclick: () => openProfile(profile) }, "Edit"),
+              ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action danger")
+              : iconAction("play-circle", "Run now", () => runNow(profile)),
+            iconAction("clock-history", "Runs", () => openRuns(profile)),
+            iconAction("pencil", "Edit", () => openProfile(profile)),
           ),
         ),
       );
