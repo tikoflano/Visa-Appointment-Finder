@@ -12,6 +12,7 @@
   --warn: #a15c07;
   --info: #2457d6;
   --disabled-row-opacity: 0.55;
+  --disabled-row-bg: #eef0f4;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
   color: var(--text);
@@ -329,6 +330,10 @@ th {
   letter-spacing: 0.03em;
   color: var(--muted);
   background: #fafbfc;
+}
+
+tr.disabled {
+  background: var(--disabled-row-bg);
 }
 
 tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip, .notify-tip)) {
