@@ -141,7 +141,7 @@
             <span slot="label" class="label-text">
               Earliest date
               <sl-tooltip placement="bottom">
-                <span slot="content">Only consider appointments on or after this date. Leave empty for no lower bound.</span>
+                <span slot="content">Inclusive: appointments on or after this date. Leave empty for no lower bound.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About earliest date"></sl-icon-button>
               </sl-tooltip>
             </span>
@@ -150,7 +150,7 @@
             <span slot="label" class="label-text">
               Latest date
               <sl-tooltip placement="bottom">
-                <span slot="content">Leave empty to search strictly before the appointment already booked on AIS. A successful run stores that booked date. Empty latest needs that date (or a set date) before the profile can be enabled next to others.</span>
+                <span slot="content">Inclusive when set: appointments on or before this date. Leave empty to search strictly before the booked AIS appointment (that day is excluded). A successful run stores the booked date. Empty latest needs that date (or a set date) before the profile can be enabled next to others.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About latest date"></sl-icon-button>
               </sl-tooltip>
             </span>
