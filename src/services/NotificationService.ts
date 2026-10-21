@@ -1,5 +1,5 @@
 import { EmailService } from "./EmailService";
-import { formatDate } from "../utils/dateUtils";
+import { addDays, formatDate, parseDateAsUtc } from "../utils/dateUtils";
 
 function escapeHtml(value: string): string {
   return value
@@ -39,8 +39,12 @@ function wrapEmail(options: {
   title: string;
   body: string;
   accent?: string;
+  badge?: string;
 }): string {
   const accent = options.accent || ACCENT.info;
+  const badge = options.badge
+    ? `<div style="margin:0 0 10px;"><span style="display:inline-block;padding:3px 8px;background:#ffffff;color:#16357a;font-size:11px;font-weight:700;letter-spacing:0.08em;">${escapeHtml(options.badge)}</span></div>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,6 +59,7 @@ function wrapEmail(options: {
         <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #dde1e8;">
           <tr>
             <td style="background:#16357a;padding:20px 24px;color:#ffffff;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;">
+              ${badge}
               <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.78;">${escapeHtml(options.kicker)}</div>
               <div style="font-size:20px;font-weight:650;letter-spacing:-0.03em;margin-top:4px;">${escapeHtml(options.title)}</div>
             </td>
@@ -94,20 +99,25 @@ function whatsappList(items: string[], empty: string): string {
 export function composeAppointmentNotification(options: {
   processId: string;
   dates: Date[];
+  test?: boolean;
 }): MailContent {
   const formatted = options.dates.map((date) => formatDate(date));
   const first = formatted[0] || "an upcoming date";
   const extras = formatted.slice(1);
   const url = appointmentUrl(options.processId);
-  const subject = "Visa appointment available";
-  const summary = extras.length
+  const subject = options.test
+    ? "[TEST] Visa appointment available"
+    : "Visa appointment available";
+  const summaryBody = extras.length
     ? `Available ${first}. Other: ${extras.join(" / ")}`
     : `Available ${first}`;
+  const summary = options.test ? `[TEST] ${summaryBody}` : summaryBody;
 
   const extraText = extras.length
     ? `\n\nOther available appointments:\n${extras.map((date) => `- ${date}`).join("\n")}`
     : "";
-  const text = `There is a visa appointment available on ${first}.${extraText}\n\nGo to ${url} to schedule it.`;
+  const textBody = `There is a visa appointment available on ${first}.${extraText}\n\nGo to ${url} to schedule it.`;
+  const text = options.test ? `[TEST]\n\n${textBody}` : textBody;
 
   const extraHtml = extras.length
     ? `<p style="margin:20px 0 8px;font-size:13px;font-weight:650;color:#1d2330;">Other available appointments</p>
@@ -116,6 +126,7 @@ export function composeAppointmentNotification(options: {
   const html = wrapEmail({
     kicker: "AIS · Chile",
     title: "Visa appointment available",
+    badge: options.test ? "[TEST]" : undefined,
     accent: ACCENT.ok,
     body: `<p style="margin:0 0 16px;">A matching date opened on the Santiago consulate calendar.</p>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 4px;">
@@ -137,6 +148,7 @@ export function composeAppointmentNotification(options: {
   });
 
   const whatsapp = [
+    ...(options.test ? ["*[TEST]*", ""] : []),
     "*Visa appointment available*",
     "",
     "A matching date opened on AIS Chile:",
@@ -291,27 +303,20 @@ Open the management UI to inspect the run and fix the profile.`;
   return { subject, summary, text, html, whatsapp };
 }
 
-export function composeTestNotification(
-  channel: "email" | "whatsapp",
-): MailContent {
-  const via = channel === "whatsapp" ? "WhatsApp" : "email";
-  const subject = `[TEST] Visa Appointment Finder (${via})`;
-  const summary = `Test ${via} notification`;
-  const text = `This is a test ${via} message from Visa Appointment Finder. If you received it, this channel is working.`;
-  const html = wrapEmail({
-    kicker: "Test",
-    title: "Visa Appointment Finder",
-    accent: ACCENT.info,
-    body: `<p style="margin:0 0 12px;">This is a test ${via} message.</p>
-        <p style="margin:0;color:#6b7385;">If you received it, this channel is working.</p>`,
+function sampleAppointmentDates(): Date[] {
+  const today = parseDateAsUtc(new Date().toISOString().slice(0, 10));
+  const first = addDays(today, 21);
+  return [first, addDays(first, 7)];
+}
+
+export function composeTestNotification(options?: {
+  processId?: string;
+}): MailContent {
+  return composeAppointmentNotification({
+    processId: options?.processId?.trim() || "00000000",
+    dates: sampleAppointmentDates(),
+    test: true,
   });
-  const whatsapp = [
-    "*Test* from Visa Appointment Finder",
-    "",
-    "This is a test WhatsApp message.",
-    "If you received it, this channel is working.",
-  ].join("\n");
-  return { subject, summary, text, html, whatsapp };
 }
 
 export class NotificationService {
@@ -355,9 +360,11 @@ export class NotificationService {
 
   async sendTestNotification(options: {
     destination: string;
-    channel: "email" | "whatsapp";
+    processId?: string;
   }): Promise<MailContent> {
-    const content = composeTestNotification(options.channel);
+    const content = composeTestNotification({
+      processId: options.processId,
+    });
     await this.emailService.sendMail(
       options.destination,
       content.subject,

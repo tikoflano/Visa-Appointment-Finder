@@ -50,9 +50,11 @@ export interface Settings {
   gmailUser: string;
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
+  emailEnabled: boolean;
   openwaSessionId: string;
   whatsappGatewayReady: boolean;
   whatsappAdminDestination: string;
+  whatsappEnabled: boolean;
   intervalMinutes: number;
   heartbeatEnabled: boolean;
   heartbeatMinutes: number;
@@ -148,8 +150,10 @@ function normalizeEmailList(value: unknown): string {
 const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
+  email_enabled: "1",
   openwa_session_id: "",
   whatsapp_admin_destination: "",
+  whatsapp_enabled: "1",
   interval_minutes: "5",
   heartbeat_enabled: "1",
   heartbeat_minutes: "1440",
@@ -385,6 +389,7 @@ export class Store {
       gmailUser: await this.getSetting("gmail_user"),
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
+      emailEnabled: (await this.getSetting("email_enabled")) === "1",
       openwaSessionId: await this.getSetting("openwa_session_id"),
       whatsappGatewayReady: !!(
         configuredOpenwaBaseUrl() && readOpenwaApiKeyFile()
@@ -392,6 +397,7 @@ export class Store {
       whatsappAdminDestination: await this.getSetting(
         "whatsapp_admin_destination",
       ),
+      whatsappEnabled: (await this.getSetting("whatsapp_enabled")) === "1",
       intervalMinutes: Number(await this.getSetting("interval_minutes")),
       heartbeatEnabled: (await this.getSetting("heartbeat_enabled")) === "1",
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
@@ -404,6 +410,14 @@ export class Store {
   }
 
   async updateSettings(input: SettingsInput): Promise<Settings> {
+    const emailEnabled = input.emailEnabled !== false;
+    const whatsappEnabled = input.whatsappEnabled !== false;
+    if (!emailEnabled && !whatsappEnabled) {
+      throw new ValidationError(
+        "At least one notification method must stay enabled",
+      );
+    }
+
     const positiveInt = (value: unknown, field: string) => {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 1) {
@@ -417,6 +431,7 @@ export class Store {
       "email_admin_destination",
       normalizeEmailList(input.emailAdminDestination),
     );
+    await this.setRawSetting("email_enabled", emailEnabled ? "1" : "0");
     try {
       await this.setRawSetting(
         "whatsapp_admin_destination",
@@ -427,6 +442,7 @@ export class Store {
         error instanceof Error ? error.message : String(error),
       );
     }
+    await this.setRawSetting("whatsapp_enabled", whatsappEnabled ? "1" : "0");
     await this.setRawSetting(
       "openwa_session_id",
       String(input.openwaSessionId ?? "").trim(),

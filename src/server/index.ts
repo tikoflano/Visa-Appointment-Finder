@@ -361,6 +361,24 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "POST",
+      pattern: /^\/api\/profiles\/(\d+)\/test-notification$/,
+      handler: async ({ params, body }) => {
+        const id = profileId(params);
+        await requireProfile(id);
+        return notifier.sendProfileTest(id, {
+          emailDestination:
+            body.emailDestination === undefined
+              ? undefined
+              : String(body.emailDestination),
+          whatsappDestination:
+            body.whatsappDestination === undefined
+              ? undefined
+              : String(body.whatsappDestination),
+        });
+      },
+    },
+    {
+      method: "POST",
       pattern: /^\/api\/profiles\/(\d+)\/enabled$/,
       handler: async ({ params, body }) => {
         await requireProfile(profileId(params));

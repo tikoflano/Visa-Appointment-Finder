@@ -189,6 +189,14 @@ h1 {
   gap: 8px;
 }
 
+#test-profile-notification {
+  margin-right: auto;
+}
+
+#test-profile-notification-tip[hidden] {
+  display: none;
+}
+
 .row-actions {
   flex-wrap: nowrap;
   gap: 2px;

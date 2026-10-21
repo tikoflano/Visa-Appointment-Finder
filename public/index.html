@@ -201,6 +201,10 @@
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
       <div slot="footer" class="dialog-actions">
+        <sl-tooltip id="test-profile-notification-tip" placement="top" hoist hidden>
+          <span slot="content">Sends a test to every notify email and WhatsApp number filled in above. Admin addresses are not included. Save is not required.</span>
+          <sl-button id="test-profile-notification" type="button">Send test notification</sl-button>
+        </sl-tooltip>
         <sl-button data-close>Cancel</sl-button>
         <sl-button variant="primary" type="submit" form="profile-form">Save</sl-button>
       </div>
@@ -215,6 +219,13 @@
             <fieldset>
               <legend>Email</legend>
               <div class="grid">
+                <div class="check-row wide">
+                  <sl-switch name="emailEnabled" checked>Enable email notifications</sl-switch>
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">When off, appointment alerts, heartbeats, failure alarms, and tests are not sent by email. At least one of email or WhatsApp must stay on.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About enabling email notifications"></sl-icon-button>
+                  </sl-tooltip>
+                </div>
                 <sl-input name="gmailUser" type="email" autocomplete="off">
                   <span slot="label" class="label-text">
                     Gmail user
@@ -251,6 +262,13 @@
             <fieldset>
               <legend>WhatsApp</legend>
               <div class="grid">
+                <div class="check-row wide">
+                  <sl-switch name="whatsappEnabled" checked>Enable WhatsApp notifications</sl-switch>
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">When off, appointment alerts, heartbeats, failure alarms, and tests are not sent by WhatsApp. At least one of email or WhatsApp must stay on.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About enabling WhatsApp notifications"></sl-icon-button>
+                  </sl-tooltip>
+                </div>
                 <input type="hidden" name="openwaSessionId" />
                 <div class="check-row wide fieldset-actions">
                   <span id="openwa-session-status" class="hint">Not linked</span>

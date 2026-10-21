@@ -364,7 +364,11 @@ async function refresh() {
     ]);
     profiles = profileList;
     checkIntervalMinutes = Number(settings.intervalMinutes) || 5;
-    setBanner("#settings-warning", !(settings.gmailUser && settings.hasGmailAppPassword));
+    setBanner(
+      "#settings-warning",
+      settings.emailEnabled &&
+        !(settings.gmailUser && settings.hasGmailAppPassword),
+    );
     const openwaReady = !!(
       settings.whatsappGatewayReady && settings.openwaSessionId
     );
@@ -377,7 +381,9 @@ async function refresh() {
     );
     setBanner(
       "#openwa-warning",
-      (wantsWhatsapp || partialOpenwa) && !openwaReady,
+      settings.whatsappEnabled &&
+        (wantsWhatsapp || partialOpenwa) &&
+        !openwaReady,
     );
     setQueueWarning();
     renderProfiles();
@@ -625,6 +631,9 @@ function openProfile(profile) {
   password.required = !profile;
   password.placeholder = profile ? "Leave empty to keep the stored password" : "";
 
+  const testTip = $("#test-profile-notification-tip");
+  testTip.hidden = !profile;
+
   profileDialog.show();
 }
 
@@ -675,6 +684,51 @@ profileForm.addEventListener("submit", async (event) => {
   }
 });
 
+function notificationChannelLabel(channel) {
+  return channel === "whatsapp" ? "WhatsApp" : "email";
+}
+
+$("#test-profile-notification").addEventListener("click", async () => {
+  if (!editingProfile) return;
+  const button = $("#test-profile-notification");
+  setError(profileForm);
+  button.loading = true;
+  try {
+    const result = await api(
+      "POST",
+      `/api/profiles/${editingProfile.id}/test-notification`,
+      {
+        emailDestination: named(profileForm, "emailDestination").value,
+        whatsappDestination: named(profileForm, "whatsappDestination").value,
+      },
+    );
+    const channels = result.channels || [];
+    const sent = channels.filter((channel) => channel.status === "sent");
+    const failed = channels.filter((channel) => channel.status !== "sent");
+    if (!failed.length) {
+      toast("Test notification sent", "success");
+      return;
+    }
+    const detail = failed
+      .map(
+        (channel) =>
+          `${notificationChannelLabel(channel.channel)}: ${channel.error || "failed"}`,
+      )
+      .join(". ");
+    if (sent.length) {
+      const sentLabel = sent
+        .map((channel) => notificationChannelLabel(channel.channel))
+        .join(" and ");
+      toast(`Sent by ${sentLabel}. ${detail}`, "warning");
+    }
+    setError(profileForm, detail);
+  } catch (error) {
+    setError(profileForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
+
 // ---- Settings dialog ----
 
 const settingsDialog = $("#settings-dialog");
@@ -701,6 +755,8 @@ $("#open-settings").addEventListener("click", async () => {
     ? "Leave empty to keep the stored password"
     : "Not set";
   named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
+  named(settingsForm, "emailEnabled").checked = !!settings.emailEnabled;
+  named(settingsForm, "whatsappEnabled").checked = !!settings.whatsappEnabled;
   named(settingsForm, "botDebug").checked = !!settings.botDebug;
   $("#last-heartbeat").textContent = lastHeartbeatLabel(settings.lastHeartbeatAt);
   resetOpenwaLinkUi();
@@ -826,8 +882,51 @@ function settingsTestPayload(channel) {
   };
 }
 
+const NOTIFICATION_METHOD_REQUIRED =
+  "At least one notification method must stay enabled";
+
+function notificationMethodsEnabled() {
+  return (
+    named(settingsForm, "emailEnabled").checked ||
+    named(settingsForm, "whatsappEnabled").checked
+  );
+}
+
+let revertingNotificationMethod = false;
+
+function guardNotificationMethods(changed) {
+  if (revertingNotificationMethod) return true;
+  if (notificationMethodsEnabled()) return true;
+  revertingNotificationMethod = true;
+  changed.checked = true;
+  revertingNotificationMethod = false;
+  setError(settingsForm, NOTIFICATION_METHOD_REQUIRED);
+  const body = settingsDialog.shadowRoot?.querySelector(".dialog__body");
+  if (body) body.scrollTop = body.scrollHeight;
+  return false;
+}
+
+for (const name of ["emailEnabled", "whatsappEnabled"]) {
+  named(settingsForm, name).addEventListener("sl-change", (event) => {
+    guardNotificationMethods(event.target);
+  });
+}
+
 async function sendNotificationTest(channel, button) {
   setError(settingsForm);
+  const method = named(
+    settingsForm,
+    channel === "whatsapp" ? "whatsappEnabled" : "emailEnabled",
+  );
+  if (!method.checked) {
+    setError(
+      settingsForm,
+      channel === "whatsapp"
+        ? "WhatsApp notifications are turned off"
+        : "Email notifications are turned off",
+    );
+    return;
+  }
   button.loading = true;
   try {
     await api("POST", "/api/settings/test-notification", settingsTestPayload(channel));
@@ -869,13 +968,19 @@ settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = settingsForm;
   setError(form);
+  if (!notificationMethodsEnabled()) {
+    setError(form, NOTIFICATION_METHOD_REQUIRED);
+    return;
+  }
   try {
     await api("PUT", "/api/settings", {
       gmailUser: named(form, "gmailUser").value,
       gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
       emailAdminDestination: named(form, "emailAdminDestination").value,
+      emailEnabled: named(form, "emailEnabled").checked,
       openwaSessionId: named(form, "openwaSessionId").value,
       whatsappAdminDestination: named(form, "whatsappAdminDestination").value,
+      whatsappEnabled: named(form, "whatsappEnabled").checked,
       intervalMinutes: Number(named(form, "intervalMinutes").value),
       heartbeatEnabled: named(form, "heartbeatEnabled").checked,
       heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),

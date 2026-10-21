@@ -93,9 +93,12 @@ export class Notifier {
     whatsappAdminDestination?: string;
   }): Promise<{ sent: boolean; channel: string; recipients: string }> {
     const saved = await this.store.getSettings();
-    const content = composeTestNotification(options.channel);
+    const content = composeTestNotification();
 
     if (options.channel === "email") {
+      if (!saved.emailEnabled) {
+        throw new ValidationError("Email notifications are turned off");
+      }
       const user = String(options.gmailUser ?? saved.gmailUser).trim();
       const pass =
         String(options.gmailAppPassword ?? "").trim() ||
@@ -113,7 +116,7 @@ export class Notifier {
         const notify = new NotificationService(
           new EmailService({ user, pass }),
         );
-        await notify.sendTestNotification({ destination, channel: "email" });
+        await notify.sendTestNotification({ destination });
         await this.logNotification({
           kind: "test",
           channel: "email",
@@ -136,6 +139,10 @@ export class Notifier {
         });
         throw new ValidationError(message);
       }
+    }
+
+    if (!saved.whatsappEnabled) {
+      throw new ValidationError("WhatsApp notifications are turned off");
     }
 
     let chats: string[];
@@ -195,6 +202,239 @@ export class Notifier {
   }
 
   /**
+   * Send a test to every notify email and WhatsApp number on a profile.
+   * Passed destinations override the saved profile for this request only.
+   * Admin copies are not included.
+   */
+  async sendProfileTest(
+    profileId: number,
+    options: {
+      emailDestination?: string;
+      whatsappDestination?: string;
+    } = {},
+  ): Promise<{
+    sent: boolean;
+    channels: {
+      channel: "email" | "whatsapp";
+      status: "sent" | "failed";
+      recipients: string;
+      error?: string;
+    }[];
+  }> {
+    const profile = await this.store.getProfile(profileId);
+    if (!profile) throw new ValidationError("Profile not found");
+
+    const emailTo = normalizeEmailList(
+      options.emailDestination !== undefined
+        ? options.emailDestination
+        : profile.emailDestination,
+    );
+    const whatsappSource =
+      options.whatsappDestination !== undefined
+        ? options.whatsappDestination
+        : profile.whatsappDestination;
+    let chats: string[] = [];
+    if (String(whatsappSource ?? "").trim()) {
+      try {
+        chats = parseWhatsAppChatIds(whatsappSource);
+      } catch (error) {
+        throw new ValidationError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    if (!emailTo && !chats.length) {
+      throw new ValidationError(
+        "Add a notify email or WhatsApp number to send a test",
+      );
+    }
+
+    const settings = await this.store.getSettings();
+    if (!settings.emailEnabled && !settings.whatsappEnabled) {
+      throw new ValidationError(
+        "At least one notification method must stay enabled",
+      );
+    }
+    const channels: {
+      channel: "email" | "whatsapp";
+      status: "sent" | "failed";
+      recipients: string;
+      error?: string;
+    }[] = [];
+
+    if (emailTo) {
+      const content = composeTestNotification({
+        processId: profile.visaProcessId,
+      });
+      if (!settings.emailEnabled) {
+        channels.push({
+          channel: "email",
+          status: "failed",
+          recipients: emailTo,
+          error: "Email notifications are turned off",
+        });
+      } else if (!this.emailReady(settings)) {
+        const error = "Gmail credentials are not configured";
+        await this.logNotification({
+          kind: "test",
+          channel: "email",
+          status: "failed",
+          profileId,
+          recipients: emailTo,
+          subject: content.subject,
+          summary: content.summary,
+          error,
+        });
+        channels.push({
+          channel: "email",
+          status: "failed",
+          recipients: emailTo,
+          error,
+        });
+      } else {
+        try {
+          const mailer = await this.mailer();
+          if (!mailer) throw new Error("Gmail credentials are not configured");
+          const sent = await mailer.notify.sendTestNotification({
+            destination: emailTo,
+            processId: profile.visaProcessId,
+          });
+          await this.logNotification({
+            kind: "test",
+            channel: "email",
+            status: "sent",
+            profileId,
+            recipients: emailTo,
+            subject: sent.subject,
+            summary: sent.summary,
+          });
+          channels.push({
+            channel: "email",
+            status: "sent",
+            recipients: emailTo,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await this.logNotification({
+            kind: "test",
+            channel: "email",
+            status: "failed",
+            profileId,
+            recipients: emailTo,
+            subject: content.subject,
+            summary: content.summary,
+            error: message,
+          });
+          channels.push({
+            channel: "email",
+            status: "failed",
+            recipients: emailTo,
+            error: message,
+          });
+        }
+      }
+    }
+
+    if (chats.length) {
+      const content = composeTestNotification({
+        processId: profile.visaProcessId,
+      });
+      const recipients = chats.join(", ");
+      if (!settings.whatsappEnabled) {
+        channels.push({
+          channel: "whatsapp",
+          status: "failed",
+          recipients,
+          error: "WhatsApp notifications are turned off",
+        });
+      } else {
+      const sessionId = settings.openwaSessionId.trim();
+      const baseUrl = configuredOpenwaBaseUrl();
+      const apiKey = await this.store.getOpenwaApiKey();
+      let setupError: string | null = null;
+      if (!baseUrl || !apiKey) {
+        setupError = "OpenWA is not configured on this host";
+      } else if (!sessionId) {
+        setupError = "Link WhatsApp before sending a test";
+      }
+      if (setupError) {
+        await this.logNotification({
+          kind: "test",
+          channel: "whatsapp",
+          status: "failed",
+          profileId,
+          recipients,
+          subject: content.subject,
+          summary: content.summary,
+          error: setupError,
+        });
+        channels.push({
+          channel: "whatsapp",
+          status: "failed",
+          recipients,
+          error: setupError,
+        });
+      } else {
+        try {
+          const client = new WhatsAppService({
+            baseUrl,
+            apiKey,
+            sessionId,
+          });
+          await client.sendToMany(
+            chats,
+            content.whatsapp,
+            `visa-test-${profileId}-${Date.now()}`,
+          );
+          await this.logNotification({
+            kind: "test",
+            channel: "whatsapp",
+            status: "sent",
+            profileId,
+            recipients,
+            subject: content.subject,
+            summary: content.summary,
+          });
+          channels.push({
+            channel: "whatsapp",
+            status: "sent",
+            recipients,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await this.logNotification({
+            kind: "test",
+            channel: "whatsapp",
+            status: "failed",
+            profileId,
+            recipients,
+            subject: content.subject,
+            summary: content.summary,
+            error: message,
+          });
+          channels.push({
+            channel: "whatsapp",
+            status: "failed",
+            recipients,
+            error: message,
+          });
+        }
+      }
+    }
+    }
+
+    if (!channels.some((channel) => channel.status === "sent")) {
+      throw new ValidationError(
+        channels
+          .map((channel) => channel.error)
+          .filter(Boolean)
+          .join(". ") || "Test notification could not be sent",
+      );
+    }
+    return { sent: true, channels };
+  }
+
+  /**
    * Notify when the profile asked for it and the bot found dates. Returns the
    * result with `notified` set if any channel sent. A send failure leaves the
    * AIS outcome as-is. Repeat dates are skipped per channel until a later
@@ -223,7 +463,8 @@ export class Notifier {
     let anySent = false;
     let lastError: string | null = null;
 
-    const emailTo = profile.emailDestination.trim();
+    const emailTo =
+      settings.emailEnabled ? profile.emailDestination.trim() : "";
     if (emailTo) {
       const outcome = await this.sendAppointmentEmail({
         profile,
@@ -238,10 +479,12 @@ export class Notifier {
       if (outcome === "failed") lastError = lastError || "email failed";
     }
 
-    const waRecipients = uniqueIds(
-      parseWhatsAppChatIds(profile.whatsappDestination),
-      parseWhatsAppChatIds(settings.whatsappAdminDestination),
-    );
+    const waRecipients = settings.whatsappEnabled
+      ? uniqueIds(
+          parseWhatsAppChatIds(profile.whatsappDestination),
+          parseWhatsAppChatIds(settings.whatsappAdminDestination),
+        )
+      : [];
     if (waRecipients.length) {
       const outcome = await this.sendWhatsApp({
         kind: "appointment",
@@ -289,12 +532,15 @@ export class Notifier {
     options: { force?: boolean } = {},
   ): Promise<{ sent: boolean; lastHeartbeatAt: string | null }> {
     const settings = await this.store.getSettings();
-    const emailReady = this.emailReady(settings);
-    const whatsappReady = this.whatsappReady(settings);
-    const adminEmail = settings.emailAdminDestination.trim();
-    const adminWhatsapp = parseWhatsAppChatIds(
-      settings.whatsappAdminDestination,
-    );
+    const emailReady = settings.emailEnabled && this.emailReady(settings);
+    const whatsappReady =
+      settings.whatsappEnabled && this.whatsappReady(settings);
+    const adminEmail = settings.emailEnabled
+      ? settings.emailAdminDestination.trim()
+      : "";
+    const adminWhatsapp = settings.whatsappEnabled
+      ? parseWhatsAppChatIds(settings.whatsappAdminDestination)
+      : [];
 
     if (options.force) {
       if (!adminEmail && !adminWhatsapp.length) {
@@ -435,12 +681,15 @@ export class Notifier {
     const profile = await this.store.getProfile(profileId);
     if (!profile) return;
 
-    const emailReady = this.emailReady(settings);
-    const whatsappReady = this.whatsappReady(settings);
-    const adminEmail = settings.emailAdminDestination.trim();
-    const adminWhatsapp = parseWhatsAppChatIds(
-      settings.whatsappAdminDestination,
-    );
+    const emailReady = settings.emailEnabled && this.emailReady(settings);
+    const whatsappReady =
+      settings.whatsappEnabled && this.whatsappReady(settings);
+    const adminEmail = settings.emailEnabled
+      ? settings.emailAdminDestination.trim()
+      : "";
+    const adminWhatsapp = settings.whatsappEnabled
+      ? parseWhatsAppChatIds(settings.whatsappAdminDestination)
+      : [];
     if (
       (!emailReady || !adminEmail) &&
       (!whatsappReady || !adminWhatsapp.length)
