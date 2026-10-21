@@ -107,7 +107,7 @@
         Gmail credentials are not configured, so email notifications and heartbeats can't be sent. Open Settings to add them, or use WhatsApp via OpenWA.
       </sl-alert>
       <sl-alert id="openwa-warning" variant="warning" hidden>
-        OpenWA is not fully configured (URL, session id, and API key), so WhatsApp notifications can't be sent. Open Settings to finish it.
+        WhatsApp is not linked, so those notifications can't be sent. Open Settings and click Link WhatsApp.
       </sl-alert>
       <sl-alert id="queue-warning" variant="warning" hidden>
         <span id="queue-warning-text"></span>
@@ -246,33 +246,23 @@
             <fieldset>
               <legend>WhatsApp</legend>
               <div class="grid">
-                <sl-input class="wide" name="openwaBaseUrl" placeholder="http://openwa:2785">
-                  <span slot="label" class="label-text">
-                    OpenWA URL
-                    <sl-tooltip placement="bottom">
-                      <span slot="content">From visa-ui in Docker use http://openwa:2785. From ./run.sh dev on the host use http://127.0.0.1:2785. Leave empty to disable WhatsApp. Use a dedicated number you can afford to lose — OpenWA is unofficial.</span>
-                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA URL"></sl-icon-button>
-                    </sl-tooltip>
-                  </span>
-                </sl-input>
-                <sl-input name="openwaSessionId">
+                <sl-input class="wide openwa-session-id" name="openwaSessionId" readonly hidden>
                   <span slot="label" class="label-text">
                     OpenWA session id
                     <sl-tooltip placement="bottom">
-                      <span slot="content">Session id from the OpenWA dashboard after you scan the QR code.</span>
+                      <span slot="content">Written by Link WhatsApp and kept read-only so it cannot be overwritten by accident. This is the session UUID, not the display name.</span>
                       <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA session id"></sl-icon-button>
                     </sl-tooltip>
                   </span>
                 </sl-input>
-                <sl-input name="openwaApiKey" type="password" autocomplete="new-password">
-                  <span slot="label" class="label-text">
-                    OpenWA API key
-                    <sl-tooltip placement="bottom">
-                      <span slot="content">Operator API key from OpenWA. Stored encrypted. Leave blank to keep the stored one.</span>
-                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA API key"></sl-icon-button>
-                    </sl-tooltip>
-                  </span>
-                </sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <span id="openwa-session-status" class="hint">Not linked</span>
+                  <sl-button id="link-openwa" type="button" size="small">Link WhatsApp</sl-button>
+                </div>
+                <div id="openwa-qr-panel" class="openwa-qr-panel wide" hidden>
+                  <img id="openwa-qr" alt="WhatsApp QR code" />
+                  <p class="hint">Scan with WhatsApp → Linked devices → Link a device. Use a dedicated number, not your daily account.</p>
+                </div>
                 <sl-input class="wide" name="whatsappAdminDestination">
                   <span slot="label" class="label-text">
                     Admin WhatsApp numbers (comma separated)

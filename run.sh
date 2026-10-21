@@ -4,9 +4,11 @@ set -euo pipefail
 BASE_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 SECRETS_DIR="$BASE_DIR/secrets"
 KEY_FILE="$SECRETS_DIR/master.key"
+OPENWA_KEY_FILE="$SECRETS_DIR/openwa.api-key"
 DB_FILE="$BASE_DIR/db.sqlite"
 IMAGE=visa
 CONTAINER_NAME=visa-ui
+DEV_CONTAINER=visa-dev
 OPENWA_CONTAINER=openwa
 OPENWA_COMPOSE="$BASE_DIR/compose.openwa.yml"
 NETWORK=visa
@@ -30,7 +32,7 @@ Start (default):
 
 Commands:
   run                      Same as the default start
-  dev                      Vite HMR UI + host API. No Docker, no login, no scheduler
+  dev                      Vite HMR UI in Docker on the visa network (http://openwa:2785)
   restart                  Recreate visa-ui even if it is already running
   stop                     Stop and remove visa-ui (OpenWA is left running)
   stop-openwa              Stop the OpenWA sidecar
@@ -38,7 +40,7 @@ Commands:
   logs-openwa              Follow OpenWA logs
   dump                     Print decrypted settings and profiles (host Node)
   set-password             Set the admin UI password (host Node)
-  generate-key             Show/create secrets/master.key
+  generate-key             Show/create secrets/master.key and secrets/openwa.api-key
   -h, --help               Show this help
 
 ./run.sh --env is gone. The old per-account cron workflow is not supported.
@@ -64,6 +66,22 @@ ensure_key() {
     echo "Back this file up. If it is lost, stored passwords cannot be decrypted."
   fi
   chmod 600 "$KEY_FILE"
+}
+
+ensure_openwa_key() {
+  mkdir -p "$SECRETS_DIR"
+  if [ ! -f "$OPENWA_KEY_FILE" ]; then
+    openssl rand -base64 32 > "$OPENWA_KEY_FILE"
+    chmod 600 "$OPENWA_KEY_FILE"
+    echo "Generated OpenWA API key at $OPENWA_KEY_FILE"
+  fi
+  chmod 600 "$OPENWA_KEY_FILE"
+  API_MASTER_KEY=$(tr -d '[:space:]' < "$OPENWA_KEY_FILE")
+  if [ "${#API_MASTER_KEY}" -lt 32 ]; then
+    echo "OpenWA API key in $OPENWA_KEY_FILE must be at least 32 characters"
+    exit 1
+  fi
+  export API_MASTER_KEY
 }
 
 source_hash() {
@@ -114,6 +132,7 @@ openwa_running() {
 }
 
 compose() {
+  ensure_openwa_key
   docker compose -f "$OPENWA_COMPOSE" "$@"
 }
 
@@ -121,6 +140,7 @@ ensure_openwa() {
   if [ "$OPENWA" != "1" ]; then
     return
   fi
+  ensure_openwa_key
   compose up -d
 }
 
@@ -130,9 +150,9 @@ print_status() {
   echo "Logs:  ./run.sh logs"
   echo "Stop:  ./run.sh stop"
   if [ "$OPENWA" = "1" ]; then
-    echo "OpenWA dashboard (QR): http://127.0.0.1:2785"
-    echo "From visa-ui use Settings URL http://openwa:2785"
-    echo "API key: docker exec $OPENWA_CONTAINER cat /app/data/.api-key"
+    echo "OpenWA hostname: openwa (not published on the host)"
+    echo "From visa-ui / visa-dev use Settings URL http://openwa:2785"
+    echo "OpenWA API key: $OPENWA_KEY_FILE (shared with visa-ui)"
     echo "OpenWA logs: ./run.sh logs-openwa"
     echo "Stop OpenWA: ./run.sh stop-openwa"
   fi
@@ -143,6 +163,8 @@ print_status() {
 docker_base=(
   -v "$BASE_DIR:$CONTAINER_HOST"
   -e "VISA_MASTER_KEY_FILE=$CONTAINER_HOST/secrets/master.key"
+  -e "OPENWA_API_KEY_FILE=$CONTAINER_HOST/secrets/openwa.api-key"
+  -e "OPENWA_BASE_URL=http://openwa:2785"
   -e "DB_PATH=$CONTAINER_HOST/db.sqlite"
   -e "TZ=$(cat /etc/timezone 2>/dev/null || echo UTC)"
   -e HOST=0.0.0.0
@@ -156,10 +178,12 @@ if [ "$OPENWA" = "1" ]; then
 fi
 
 ensure_key
+ensure_openwa_key
 touch "$DB_FILE"
 
 if [ "${1:-}" = "generate-key" ]; then
   echo "Master key is at $KEY_FILE"
+  echo "OpenWA API key is at $OPENWA_KEY_FILE"
   exit 0
 fi
 
@@ -169,6 +193,7 @@ if [ "${1:-}" = "set-password" ] || [ "${1:-}" = "dump" ]; then
     exit 1
   fi
   export VISA_MASTER_KEY_FILE="$KEY_FILE"
+  export OPENWA_API_KEY_FILE="$OPENWA_KEY_FILE"
   export DB_PATH="$DB_FILE"
   cd "$BASE_DIR"
   exec node build/server/cli.js "$1"
@@ -207,48 +232,43 @@ if [ "${1:-}" = "logs-openwa" ]; then
 fi
 
 if [ "${1:-}" = "dev" ]; then
-  if [ ! -d "$BASE_DIR/node_modules" ]; then
-    echo "node_modules missing. Run: npm install"
-    exit 1
-  fi
   api_port="${API_PORT:-3456}"
   vite_port="${VITE_DEV_PORT:-5173}"
-  export VISA_MASTER_KEY_FILE="$KEY_FILE"
-  export DB_PATH="$DB_FILE"
-  export HOST=127.0.0.1
-  export PORT="$api_port"
-  export VISA_DEV=1
-  export PUBLIC_DIR="$BASE_DIR/public"
-  export VITE_API_PORT="$api_port"
-  export VITE_DEV_PORT="$vite_port"
-  cd "$BASE_DIR"
-  npx tsc
+  if [ -z "$(docker images -q "$IMAGE" 2>/dev/null || true)" ]; then
+    echo "Building $IMAGE image for dockerized dev"
+    build_image "$(source_hash)"
+  fi
+  ensure_openwa
+  if [ "$(docker inspect -f '{{.State.Running}}' "$DEV_CONTAINER" 2>/dev/null || echo false)" = "true" ]; then
+    docker rm -f "$DEV_CONTAINER" >/dev/null
+  fi
   echo "Dev UI (HMR): http://127.0.0.1:$vite_port"
-  echo "API:          http://127.0.0.1:$api_port  (proxied by Vite)"
-  echo "Open the Vite URL above — not :$api_port or :3000. CSS and JS update in the browser without a refresh."
-  echo "Login skipped, scheduler off. Production visa-ui on :3000 is left running."
-  npx tsc --watch --preserveWatchOutput --pretty false &
-  tsc_pid=$!
-  node --watch build/server/index.js &
-  node_pid=$!
-  trap 'kill "$tsc_pid" "$node_pid" 2>/dev/null || true' EXIT INT TERM
-  for i in $(seq 1 50); do
-    if curl -sf "http://127.0.0.1:$api_port/api/session" >/dev/null; then
-      break
-    fi
-    if [ "$i" -eq 50 ]; then
-      echo "API did not start on port $api_port"
-      exit 1
-    fi
-    sleep 0.1
-  done
-  # Unset PORT so Vite does not bind the API port. Preload a crypto
-  # polyfill: Vite default-imports node:crypto and crashes when
-  # getRandomValues is missing on that export.
-  env -u PORT node --require "$BASE_DIR/scripts/polyfill-crypto.cjs" \
-    "$BASE_DIR/node_modules/vite/bin/vite.js" \
-    --port "$vite_port" --host 127.0.0.1 --clearScreen false
-  exit 0
+  echo "Open that URL — not :$api_port or :3000. Production visa-ui on :3000 is left running."
+  if [ "$OPENWA" = "1" ]; then
+    echo "OpenWA is http://openwa:2785 inside the visa network (not published on the host)."
+  fi
+  dev_args=(
+    --rm --name "$DEV_CONTAINER" --entrypoint bash
+    -v "$BASE_DIR:$CONTAINER_HOST"
+    -e "VISA_MASTER_KEY_FILE=$CONTAINER_HOST/secrets/master.key"
+    -e "OPENWA_API_KEY_FILE=$CONTAINER_HOST/secrets/openwa.api-key"
+    -e "DB_PATH=$CONTAINER_HOST/db.sqlite"
+    -e "TZ=$(cat /etc/timezone 2>/dev/null || echo UTC)"
+    -e HOST=127.0.0.1
+    -e "PORT=$api_port"
+    -e VISA_DEV=1
+    -e "PUBLIC_DIR=$CONTAINER_HOST/public"
+    -e "VITE_API_PORT=$api_port"
+    -e "VITE_DEV_PORT=$vite_port"
+    -e VITE_LISTEN_HOST=0.0.0.0
+    -e VITE_HMR_HOST=127.0.0.1
+    --shm-size=1g
+    -p "$HOST_BIND:$vite_port:$vite_port"
+  )
+  if [ "$OPENWA" = "1" ]; then
+    dev_args+=(--network "$NETWORK" -e OPENWA_BASE_URL=http://openwa:2785)
+  fi
+  exec docker run "${dev_args[@]}" "$IMAGE" "$CONTAINER_HOST/scripts/dev.sh"
 fi
 
 foreground=0

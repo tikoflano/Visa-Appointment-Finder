@@ -1,8 +1,8 @@
 # Sidecar WhatsApp gateway. Not the visa-ui app.
-# visa-ui (started by ./run.sh) joins the same `visa` network and calls http://openwa:2785
+# visa-ui and visa-dev join the same `visa` network and call http://openwa:2785
 #
 # Do not set this network to internal: OpenWA must reach WhatsApp on the internet.
-# The dashboard is published on localhost only.
+# Port 2785 is not published on the host; scan the QR from the visa UI.
 
 name: visa
 
@@ -16,8 +16,6 @@ services:
     shm_size: 1g
     mem_limit: 2g
     pids_limit: 2048
-    ports:
-      - "127.0.0.1:2785:2785"
     expose:
       - "2785"
     volumes:
@@ -34,6 +32,7 @@ services:
       SEND_PACING_ENABLED: "true"
       ENABLE_SWAGGER: "false"
       MCP_ENABLED: "false"
+      API_MASTER_KEY: "${API_MASTER_KEY}"
     networks:
       visa:
         aliases:

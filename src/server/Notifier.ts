@@ -19,7 +19,7 @@ import {
   ValidationError,
 } from "./Store";
 import {
-  normalizeOpenwaBaseUrl,
+  configuredOpenwaBaseUrl,
   openwaConfigured,
   parseWhatsAppChatIds,
   WhatsAppService,
@@ -86,9 +86,7 @@ export class Notifier {
     gmailUser?: string;
     gmailAppPassword?: string;
     emailAdminDestination?: string;
-    openwaBaseUrl?: string;
     openwaSessionId?: string;
-    openwaApiKey?: string;
     whatsappAdminDestination?: string;
   }): Promise<{ sent: boolean; channel: string; recipients: string }> {
     const saved = await this.store.getSettings();
@@ -137,12 +135,8 @@ export class Notifier {
       }
     }
 
-    let baseUrl: string;
     let chats: string[];
     try {
-      baseUrl = normalizeOpenwaBaseUrl(
-        options.openwaBaseUrl ?? saved.openwaBaseUrl,
-      );
       chats = parseWhatsAppChatIds(
         options.whatsappAdminDestination ?? saved.whatsappAdminDestination,
       );
@@ -154,13 +148,13 @@ export class Notifier {
     const sessionId = String(
       options.openwaSessionId ?? saved.openwaSessionId,
     ).trim();
-    const apiKey =
-      String(options.openwaApiKey ?? "").trim() ||
-      (await this.store.getOpenwaApiKey());
-    if (!baseUrl || !sessionId || !apiKey) {
-      throw new ValidationError(
-        "OpenWA URL, session id, and API key are required",
-      );
+    const baseUrl = configuredOpenwaBaseUrl();
+    const apiKey = await this.store.getOpenwaApiKey();
+    if (!baseUrl || !apiKey) {
+      throw new ValidationError("OpenWA is not configured on this host");
+    }
+    if (!sessionId) {
+      throw new ValidationError("Link WhatsApp before sending a test");
     }
     if (!chats.length) {
       throw new ValidationError("Admin WhatsApp numbers are required");
@@ -730,7 +724,7 @@ export class Notifier {
   private async whatsapp(settings: Settings): Promise<WhatsAppService | null> {
     if (!this.whatsappReady(settings)) return null;
     return new WhatsAppService({
-      baseUrl: settings.openwaBaseUrl,
+      baseUrl: configuredOpenwaBaseUrl(),
       apiKey: await this.store.getOpenwaApiKey(),
       sessionId: settings.openwaSessionId,
     });

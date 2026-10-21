@@ -51,12 +51,13 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
   server: {
-    host: "127.0.0.1",
+    host: process.env.VITE_LISTEN_HOST || "127.0.0.1",
     port: Number(process.env.VITE_DEV_PORT || 5173),
     strictPort: true,
     hmr: {
-      host: "127.0.0.1",
+      host: process.env.VITE_HMR_HOST || "127.0.0.1",
       port: Number(process.env.VITE_DEV_PORT || 5173),
+      clientPort: Number(process.env.VITE_DEV_PORT || 5173),
     },
     proxy: {
       "/api": {

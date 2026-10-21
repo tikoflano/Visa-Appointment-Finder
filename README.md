@@ -2,18 +2,29 @@
 
 Helps reschedule a US visa appointment at the Chilean consulate to an earlier date.
 
-One long-running process serves a local admin UI, stores every account in SQLite, and launches Playwright checks as child processes. There is no per-account container and no cron job.
+One long-running process serves a local admin UI, stores every account in SQLite, and launches Playwright checks as child processes. There is no per-account container and no cron job. WhatsApp is a separate OpenWA sidecar on the same Docker network — not inlined in Playwright, and not Meta Cloud API.
 
 ## How it works
 
 ```
 ./run.sh
-    └── Docker container visa-ui (restart unless-stopped)
-            └── node build/server/index.js     UI + scheduler + notifier
-                    ├── HTTP on port 3000
-                    ├── SQLite (db.sqlite)
-                    └── spawn node build/index.js   one Playwright check per due profile
+    └── Docker network visa   (user-defined; not internal — OpenWA must reach WhatsApp)
+            ├── openwa          compose.openwa.yml, hostname openwa
+            │     ├── HTTP API on :2785 (not published on the host)
+            │     ├── whatsapp-web.js (headless Chromium)
+            │     ├── volume openwa-data  (linked WhatsApp session)
+            │     └── API_MASTER_KEY from secrets/openwa.api-key
+            └── visa-ui         restart unless-stopped
+                  env OPENWA_BASE_URL=http://openwa:2785
+                  env OPENWA_API_KEY_FILE=/host/secrets/openwa.api-key
+                  └── node build/server/index.js     UI + scheduler + notifier
+                          ├── HTTP on port 3000
+                          ├── SQLite (db.sqlite)
+                          ├── spawn node build/index.js   one Playwright check per due profile
+                          └── Notifier → Gmail and/or OpenWA send-text
 ```
+
+`./run.sh dev` uses the same `visa` network and OpenWA hostname. The UI is `visa-dev` (Vite on :5173, API on loopback inside that container). Port 2785 stays unpublished so the host never talks to OpenWA.
 
 1. `./run.sh` starts a **detached** container named `visa-ui`. Closing the terminal does not stop it. Docker restarts it after a reboot unless you `./run.sh stop`.
 2. The management server listens on http://127.0.0.1:3000 (password-protected).
@@ -37,6 +48,8 @@ The child does not read env files. The scheduler decrypts the visa password and 
 | `db.sqlite` | Profiles, settings, run history, appointment logs |
 | `db.sqlite-wal`, `db.sqlite-shm` | SQLite WAL sidecars (same database; needed because the UI and bot share the file). Do not delete them while the UI is running. |
 | `secrets/master.key` | 32-byte base64 AES key. **Never commit this.** If it is lost, stored passwords cannot be decrypted. |
+| `secrets/openwa.api-key` | Shared OpenWA admin key (≥32 characters). `./run.sh` writes it and passes the same value into OpenWA as `API_MASTER_KEY` and into visa-ui / visa-dev as `OPENWA_API_KEY_FILE`. **Never commit this.** |
+| Docker volume `openwa-data` | OpenWA’s session store. Survives `./run.sh stop` and `./run.sh stop-openwa`. Wiping the volume unlinks WhatsApp; click **Link WhatsApp** again. |
 
 SQLite is opened in WAL mode so the server and several Playwright children can write concurrently. Back up all three `db.sqlite*` files together if you copy the database while the UI is running.
 
@@ -102,14 +115,14 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 | `./run.sh --rebuild` | Force-rebuild the `visa` image, replace the running container, keep it detached. |
 | `./run.sh --foreground` | Run attached to this terminal (`docker run --rm`). Closing the terminal stops the UI and the bots. Stops a detached `visa-ui` first if one is running. |
 | `./run.sh --rebuild --foreground` | Force-rebuild, then run attached. Flag order does not matter. |
-| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173, API on :3456. Open **5173**, not the production UI on :3000. CSS and JS update in the browser without a refresh. Skips login and does not start the scheduler or notifier, so it will not double-run bots or send automatic mail next to `visa-ui`. TypeScript changes restart the API process only. `npm run dev` is the same. |
+| `./run.sh dev` | Vite HMR UI at http://127.0.0.1:5173 in a `visa-dev` container on the `visa` network. Open **5173**, not the production UI on :3000. The API stays on loopback inside that container (Vite proxies `/api`). OpenWA is `http://openwa:2785` and is not published on the host. Skips login and does not start the scheduler or notifier. TypeScript changes restart the API process only. `npm run dev` is the same. |
 | `./run.sh logs` | Follow `visa-ui` logs (`docker logs -f`). Ctrl+C only leaves the log stream; the container keeps running. |
 | `./run.sh logs-openwa` | Follow the OpenWA sidecar logs. |
 | `./run.sh stop` | Stop and remove `visa-ui`. Scheduled checks stop too. Leaves OpenWA running so the WhatsApp session stays linked. |
 | `./run.sh stop-openwa` | Stop the OpenWA sidecar (session data stays on the `openwa-data` volume). |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
 | `./run.sh set-password` | Prompt for a new admin UI password. Same host Node path as `dump`. |
-| `./run.sh generate-key` | Print the path of `secrets/master.key`. Creates the file if it does not exist. |
+| `./run.sh generate-key` | Show or create `secrets/master.key` and `secrets/openwa.api-key`. |
 | `./run.sh --help` | Print the same command list. |
 
 `./run.sh --env` is gone. The old per-account cron workflow is not supported.
@@ -119,7 +132,7 @@ Environment variables `run.sh` honors when starting the container:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HOST_BIND` | `127.0.0.1` | Address published on the host (`0.0.0.0` to expose on the LAN) |
-| `PORT` | `3000` | Host port mapped to the container’s 3000. Do not set this to `3456` while `./run.sh dev` is using that port for the API |
+| `PORT` | `3000` | Host port mapped to production `visa-ui`’s 3000 |
 | `COOKIE_SECURE` | unset | Set `true` if you terminate TLS in front of the UI |
 | `OPENWA` | `1` | Set `0` to start `visa-ui` without the OpenWA sidecar or the `visa` network |
 
@@ -168,7 +181,7 @@ The table lists every profile: enabled switch, name, **current appointment**, **
 - **All runs** — toolbar clock. Same list, mix bar, and filters for every profile together, plus a **Profile** column and a profile dropdown. Use this for an admin view of execution and overall success vs failure rate.
 - **Calendar** — toolbar calendar. A monthly grid of **enabled** profiles and the days they search. Inclusive latest dates fill those days; an empty latest date fills every day **strictly before** the stored booked appointment. That booked day is shown as a dashed chip and is not part of the search window. Profiles with no latest date and no booked appointment appear in the legend as **no window yet**. Previous / Next / Today move the month. Overlap is refused when enabling, so two enabled profiles should not share a day.
 - **Notifications** — admin log of every appointment, heartbeat, failure alarm, or Settings test the notifier sent or failed to send, on **email** or **WhatsApp**. Opens on the **last 24 hours**. Filter by from/to, kind, status, and channel. Click a row for recipients and subject.
-- **Settings** — two tabs. **Notifications** is Gmail, admin emails, OpenWA (URL / session / API key), and admin WhatsApp numbers, plus **Test email** / **Test WhatsApp** (uses the form values; Save is not required). **Scheduler** is check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, failure alarm (default 3 consecutive errors), and bot debug. Save writes both tabs.
+- **Settings** — two tabs. **Notifications** is Gmail, admin emails, **Link WhatsApp** (creates the session and shows a QR), and admin WhatsApp numbers, plus **Test email** / **Test WhatsApp**. OpenWA’s URL and API key come from the host (`http://openwa:2785` and `secrets/openwa.api-key`), not from Settings. **Scheduler** is check interval (default 5 minutes), heartbeat, max concurrent runs, run timeout, failure alarm (default 3 consecutive errors), and bot debug. Save writes both tabs.
 
 **Notify** (orange badge) alerts the profile’s email and/or WhatsApp destinations when a matching date exists. At least one destination is required if notify is on. The same dates are not sent again on that channel until the date list changes. **Admin notification emails** get a BCC; **admin WhatsApp numbers** get a copy of appointment alerts. Profile recipients do not see admin email addresses. The Playwright child only reports dates; the server notifier sends after the check exits.
 
@@ -182,18 +195,26 @@ If every enabled channel fails, the AIS result is still stored and `notified` st
 
 **Bot debug** is off by default. A check only prints `VISA_RESULT` JSON (stdout) plus errors. Turn on **Capture bot debug output** in Settings when you are investigating a failure: the next scheduled or **Run now** checks pass `--debug`, keep step-by-step bot messages (login, home page, Playwright, …) on that run, and show them under the expanded result in **Runs**. Leave it off afterward. For a bot started by hand, `node build/index.js --debug` does the same for that process only. Pass `--reschedule` only when the server (or you) wants that process to book the first match.
 
-WhatsApp uses a self-hosted [OpenWA](https://github.com/rmyndharis/OpenWA) sidecar (`compose.openwa.yml`). `./run.sh` puts `visa-ui` and `openwa` on a Docker network named `visa`. Inside that network the hostname is **`openwa`**; the notifier calls `http://openwa:2785`. The OpenWA dashboard is published on the host as http://127.0.0.1:2785 only (for the QR). It is not inside the `visa-ui` container.
+## WhatsApp architecture
 
-The sidecar pins OpenWA’s **whatsapp-web.js** engine (headless Chromium, lower ban fingerprint than Baileys). Use a **dedicated** number you can afford to lose — this is unofficial WhatsApp Web, not Meta Cloud API.
+WhatsApp is an unofficial [OpenWA](https://github.com/rmyndharis/OpenWA) HTTP gateway in its own container (`compose.openwa.yml`), not a process inside Playwright and not Meta Cloud API. The visa server is only a client: create/start/QR/status plus `POST /api/sessions/{id}/messages/send-text`. Gmail stays the email path and a fallback when WhatsApp is not linked.
+
+**Network.** `visa-ui`, `visa-dev`, and `openwa` share a user-defined Docker network named `visa`. The hostname is **`openwa`**. The network must not be `internal: true` — OpenWA has to reach WhatsApp on the internet. Port 2785 is not published on the host. Scan the QR from **Settings → Link WhatsApp**; do not open an OpenWA dashboard on the host.
+
+**Host config vs Settings.** The gateway URL and API key are not user settings and are not stored in SQLite. `OPENWA_BASE_URL` defaults to `http://openwa:2785`. The API key is `secrets/openwa.api-key` (OpenWA `API_MASTER_KEY`). Startup deletes leftover `openwa_base_url` / `openwa_api_key` rows. Settings keeps the session UUID (read-only, hidden until **Link WhatsApp** writes it) and admin WhatsApp numbers. `whatsappGatewayReady` is derived from “URL parses and the key file is readable,” not a live health check.
+
+**Session.** OpenWA’s session **name** is `visa`; the **id** is a UUID. **Link WhatsApp** reuses that name (or the stored id). If the session is already `ready`, a second click does not destroy it or show a new QR. `./run.sh stop` leaves OpenWA running so the link survives a visa-ui recreate. `./run.sh stop-openwa` stops the sidecar; session files stay on `openwa-data` until the volume is removed.
+
+**Sends.** Appointment WhatsApp alerts go to unique(profile numbers + admin numbers) and are debounced per profile and channel on the sorted date list. Heartbeats and failure alarms can be WhatsApp-only. A 409 / “session is not connected” from OpenWA is retryable — WhatsApp Web can still be injecting while status reads `ready`. The home banner only means “no session id or the host key/URL is missing,” not “OpenWA is down” or “the session was destroyed.” Settings refreshes status when you open it.
+
+The sidecar pins OpenWA’s **whatsapp-web.js** engine (headless Chromium, lower ban fingerprint than Baileys). Use a **dedicated** number you can afford to lose.
 
 A `visa-ui` container started before this sidecar will not be on the `visa` network until `./run.sh restart`.
 
-1. `./run.sh` (pulls `ghcr.io/rmyndharis/openwa` the first time)
-2. Open http://127.0.0.1:2785, create a session, scan the QR
-3. Copy the admin key: `docker exec openwa cat /app/data/.api-key`
-4. In **Settings → Notifications**, set OpenWA URL to `http://openwa:2785`, the session id, and that API key
+1. `./run.sh` (pulls `ghcr.io/rmyndharis/openwa` the first time, writes `secrets/openwa.api-key`)
+2. In **Settings → Notifications**, click **Link WhatsApp** and scan the QR with a dedicated number (WhatsApp → Linked devices → Link a device)
 
-`./run.sh dev` is a host process, so it cannot resolve `openwa`. Use `http://127.0.0.1:2785` there, or `OPENWA=0` if you do not want the sidecar. Phone numbers are E.164 with country code, or a group id (`…@g.us`). Do not link a personal daily WhatsApp account.
+Phone numbers are digits with country code (punctuation is stripped) or a group id (`…@g.us`). Same format on profiles and admin numbers.
 
 `OPENWA=0 ./run.sh` starts only `visa-ui`.
 
@@ -214,7 +235,7 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 
 **profile** — one row per visa account: name, email, encrypted password, process ID, notify emails, WhatsApp destinations, min/max dates, last-seen booked appointment, actions (`notify`, `reschedule`), enabled flag.
 
-**setting** — Gmail user, encrypted Gmail app password, admin notification emails, OpenWA URL / session / encrypted API key, admin WhatsApp numbers, check interval, heartbeat enabled/interval, concurrency, run timeout, failure alarm threshold, bot debug flag, admin password hash, key-check ciphertext.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, OpenWA session id, admin WhatsApp numbers, check interval, heartbeat enabled/interval, concurrency, run timeout, failure alarm threshold, bot debug flag, admin password hash, key-check ciphertext.
 
 **run** — each scheduler/manual execution (status, structured `VISA_RESULT` JSON, timestamps, and debug output only if that was on). Old rows are pruned after 14 days.
 
@@ -227,13 +248,15 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `VISA_MASTER_KEY_FILE` | `secrets/master.key` | 32-byte base64 master key |
+| `OPENWA_API_KEY_FILE` | `secrets/openwa.api-key` | Shared OpenWA admin key (`API_MASTER_KEY` in the sidecar). Must be at least 32 characters |
+| `OPENWA_BASE_URL` | `http://openwa:2785` | OpenWA gateway URL (not stored in Settings) |
 | `DB_PATH` | `./db.sqlite` | SQLite database |
 | `PUBLIC_DIR` | `build/ui` | Vite production build of the admin UI. `./run.sh dev` still points this at `public/` for the API process; the browser should use Vite on :5173 |
 | `VISA_DEV` | unset | Set `1` for `./run.sh dev`: skip login, do not start the scheduler or notifier. Refused unless `HOST` is localhost |
 | `HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address the Node server binds |
 | `PORT` | `3000` | Listen port inside the process (Docker / `npm start`) |
 | `API_PORT` | `3456` | `./run.sh dev` API port that Vite proxies to |
-| `VITE_DEV_PORT` | `5173` | `./run.sh dev` Vite UI port (open this in the browser) |
+| `VITE_DEV_PORT` | `5173` | Host port published from the `visa-dev` Vite UI (open this in the browser) |
 | `HOST_BIND` | `127.0.0.1` | Address Docker publishes on the host |
 | `COOKIE_SECURE` | unset | Set `true` behind HTTPS |
 
@@ -247,3 +270,4 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 | `npm run cli -- dump` | Same as `./run.sh dump` |
 | `npm run cli -- set-password` | Same as `./run.sh set-password` |
 | `npm run cli -- generate-key` | Create `secrets/master.key` if it does not exist |
+| `npm run test:openwa` | Typecheck and run the OpenWA notifier tests against a mock gateway |

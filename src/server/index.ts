@@ -6,6 +6,13 @@ import { Notifier } from "./Notifier";
 import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
 import { openDatabase, Store, ValidationError } from "./Store";
+import {
+  configuredOpenwaBaseUrl,
+  ensureOpenwaSession,
+  OpenwaClient,
+  readOpenwaSession,
+  WhatsAppError,
+} from "./whatsapp";
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3000);
@@ -161,6 +168,15 @@ function parseNotificationChannel(
   throw new HttpError(400, "Invalid channel");
 }
 
+async function openwaClientFrom(store: Store): Promise<OpenwaClient> {
+  const baseUrl = configuredOpenwaBaseUrl();
+  const apiKey = await store.getOpenwaApiKey();
+  if (!baseUrl || !apiKey) {
+    throw new ValidationError("OpenWA is not configured on this host");
+  }
+  return new OpenwaClient({ baseUrl, apiKey });
+}
+
 function parseOrderQuery(value: string | null): "asc" | "desc" {
   const raw = value?.trim().toLowerCase();
   if (!raw || raw === "desc") return "desc";
@@ -205,7 +221,7 @@ function send(
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy":
-      "default-src 'self'; frame-ancestors 'none'; form-action 'self'",
+      "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'",
   });
   res.end(body);
 }
@@ -467,11 +483,46 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           gmailUser: body.gmailUser,
           gmailAppPassword: body.gmailAppPassword,
           emailAdminDestination: body.emailAdminDestination,
-          openwaBaseUrl: body.openwaBaseUrl,
           openwaSessionId: body.openwaSessionId,
-          openwaApiKey: body.openwaApiKey,
           whatsappAdminDestination: body.whatsappAdminDestination,
         });
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/settings\/openwa\/session$/,
+      handler: async ({ body }) => {
+        try {
+          const client = await openwaClientFrom(store);
+          const result = await ensureOpenwaSession(
+            client,
+            String(body.openwaSessionId ?? ""),
+          );
+          await store.setOpenwaSessionId(result.session.id);
+          return result;
+        } catch (error) {
+          if (error instanceof WhatsAppError) {
+            throw new ValidationError(error.message);
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/settings\/openwa\/session\/status$/,
+      handler: async ({ body }) => {
+        try {
+          const client = await openwaClientFrom(store);
+          const sessionId = String(body.openwaSessionId ?? "").trim();
+          const result = await readOpenwaSession(client, sessionId);
+          return result;
+        } catch (error) {
+          if (error instanceof WhatsAppError) {
+            throw new ValidationError(error.message);
+          }
+          throw error;
+        }
       },
     },
     {

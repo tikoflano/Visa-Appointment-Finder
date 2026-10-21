@@ -329,19 +329,14 @@ async function refresh() {
     checkIntervalMinutes = Number(settings.intervalMinutes) || 5;
     setBanner("#settings-warning", !(settings.gmailUser && settings.hasGmailAppPassword));
     const openwaReady = !!(
-      settings.openwaBaseUrl &&
-      settings.openwaSessionId &&
-      settings.hasOpenwaApiKey
+      settings.whatsappGatewayReady && settings.openwaSessionId
     );
     const wantsWhatsapp = profileList.some(
       (profile) =>
         profile.actions?.includes("notify") && profile.whatsappDestination,
     );
     const partialOpenwa = !!(
-      settings.openwaBaseUrl ||
-      settings.openwaSessionId ||
-      settings.hasOpenwaApiKey ||
-      settings.whatsappAdminDestination
+      settings.openwaSessionId || settings.whatsappAdminDestination
     );
     setBanner(
       "#openwa-warning",
@@ -640,7 +635,6 @@ $("#open-settings").addEventListener("click", async () => {
   for (const field of [
     "gmailUser",
     "emailAdminDestination",
-    "openwaBaseUrl",
     "openwaSessionId",
     "whatsappAdminDestination",
     "intervalMinutes",
@@ -654,20 +648,126 @@ $("#open-settings").addEventListener("click", async () => {
   named(settingsForm, "gmailAppPassword").placeholder = settings.hasGmailAppPassword
     ? "Leave empty to keep the stored password"
     : "Not set";
-  named(settingsForm, "openwaApiKey").placeholder = settings.hasOpenwaApiKey
-    ? "Leave empty to keep the stored key"
-    : "Not set";
   named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
   named(settingsForm, "botDebug").checked = !!settings.botDebug;
   $("#last-heartbeat").textContent = lastHeartbeatLabel(settings.lastHeartbeatAt);
+  resetOpenwaLinkUi();
   $("sl-tab-group", settingsForm)?.show("notifications");
   settingsDialog.show();
+  if (settings.whatsappGatewayReady && settings.openwaSessionId) {
+    refreshOpenwaStatus().catch(() => {});
+  }
 });
 
 function lastHeartbeatLabel(iso) {
   if (!iso) return "Last sent: never";
   return `Last sent: ${formatTimestamp(iso)} (${relativeTime(iso)})`;
 }
+
+let openwaPollTimer = 0;
+
+function openwaAuthPayload() {
+  const form = settingsForm;
+  return {
+    openwaSessionId: named(form, "openwaSessionId").value,
+  };
+}
+
+function stopOpenwaPoll() {
+  if (openwaPollTimer) {
+    clearTimeout(openwaPollTimer);
+    openwaPollTimer = 0;
+  }
+}
+
+function syncOpenwaSessionIdField() {
+  const input = named(settingsForm, "openwaSessionId");
+  input.hidden = !String(input.value || "").trim();
+}
+
+function resetOpenwaLinkUi() {
+  stopOpenwaPoll();
+  $("#openwa-session-status").textContent = "Not linked";
+  $("#openwa-qr-panel").hidden = true;
+  $("#openwa-qr").removeAttribute("src");
+  syncOpenwaSessionIdField();
+}
+
+function openwaStatusLabel(session) {
+  const status = String(session?.status || "").toLowerCase();
+  if (status === "ready") {
+    return session.phone
+      ? `Linked · ${session.phone}${session.pushName ? ` (${session.pushName})` : ""}`
+      : "Linked";
+  }
+  if (status === "qr_ready") return "Scan the QR code with WhatsApp";
+  if (status === "authenticating") return "QR scanned · finishing link…";
+  if (status === "initializing") return "Starting WhatsApp session…";
+  if (status === "action_required") {
+    return session.lastError || "WhatsApp needs a tap on the phone";
+  }
+  if (status === "failed") return session.lastError || "Link failed";
+  if (status === "disconnected") return "Disconnected · click Link WhatsApp";
+  return status ? `Session: ${status}` : "Not linked";
+}
+
+function applyOpenwaLink(result) {
+  if (result?.session?.id) {
+    named(settingsForm, "openwaSessionId").value = result.session.id;
+  }
+  syncOpenwaSessionIdField();
+  $("#openwa-session-status").textContent = openwaStatusLabel(result?.session);
+  const qr = $("#openwa-qr");
+  const panel = $("#openwa-qr-panel");
+  if (result?.qrCode) {
+    qr.src = result.qrCode;
+    panel.hidden = false;
+  } else {
+    qr.removeAttribute("src");
+    panel.hidden = true;
+  }
+  const status = String(result?.session?.status || "").toLowerCase();
+  return status === "ready" || status === "failed";
+}
+
+function scheduleOpenwaPoll(remaining) {
+  stopOpenwaPoll();
+  if (remaining <= 0) {
+    $("#openwa-session-status").textContent = "Still waiting for a scan. Click Link WhatsApp to refresh the QR.";
+    return;
+  }
+  openwaPollTimer = window.setTimeout(async () => {
+    try {
+      const result = await api("POST", "/api/settings/openwa/session/status", openwaAuthPayload());
+      if (!applyOpenwaLink(result)) scheduleOpenwaPoll(remaining - 1);
+    } catch (error) {
+      setError(settingsForm, error.message);
+    }
+  }, 2000);
+}
+
+async function refreshOpenwaStatus() {
+  const result = await api("POST", "/api/settings/openwa/session/status", openwaAuthPayload());
+  applyOpenwaLink(result);
+}
+
+$("#link-openwa").addEventListener("click", async () => {
+  const button = $("#link-openwa");
+  setError(settingsForm);
+  button.loading = true;
+  stopOpenwaPoll();
+  try {
+    const result = await api("POST", "/api/settings/openwa/session", openwaAuthPayload());
+    if (!applyOpenwaLink(result)) scheduleOpenwaPoll(60);
+    else if (result.session?.status === "ready") toast("WhatsApp is linked", "success");
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
+
+settingsDialog.addEventListener("sl-hide", stopOpenwaPoll);
 
 function settingsTestPayload(channel) {
   const form = settingsForm;
@@ -676,9 +776,7 @@ function settingsTestPayload(channel) {
     gmailUser: named(form, "gmailUser").value,
     gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
     emailAdminDestination: named(form, "emailAdminDestination").value,
-    openwaBaseUrl: named(form, "openwaBaseUrl").value,
     openwaSessionId: named(form, "openwaSessionId").value,
-    openwaApiKey: named(form, "openwaApiKey").value || undefined,
     whatsappAdminDestination: named(form, "whatsappAdminDestination").value,
   };
 }
@@ -731,9 +829,7 @@ settingsForm.addEventListener("submit", async (event) => {
       gmailUser: named(form, "gmailUser").value,
       gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
       emailAdminDestination: named(form, "emailAdminDestination").value,
-      openwaBaseUrl: named(form, "openwaBaseUrl").value,
       openwaSessionId: named(form, "openwaSessionId").value,
-      openwaApiKey: named(form, "openwaApiKey").value || undefined,
       whatsappAdminDestination: named(form, "whatsappAdminDestination").value,
       intervalMinutes: Number(named(form, "intervalMinutes").value),
       heartbeatEnabled: named(form, "heartbeatEnabled").checked,

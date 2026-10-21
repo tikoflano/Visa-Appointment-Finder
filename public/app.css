@@ -519,6 +519,33 @@ sl-dialog::part(footer) {
   max-width: 70%;
 }
 
+sl-input.openwa-session-id[readonly]::part(base) {
+  background: #f3f5f9;
+  cursor: default;
+}
+
+.openwa-qr-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.openwa-qr-panel[hidden] {
+  display: none !important;
+}
+
+.openwa-qr-panel img {
+  width: 220px;
+  height: 220px;
+  image-rendering: pixelated;
+  background: #fff;
+}
+
 fieldset {
   border: 1px solid var(--border);
   border-radius: 8px;

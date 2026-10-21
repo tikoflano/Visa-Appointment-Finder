@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import fs from "fs";
 import sqlite3 from "sqlite3";
 import { Database, open } from "sqlite";
 import {
@@ -10,7 +11,7 @@ import {
 import { Action } from "../types";
 import { SecretBox } from "./SecretBox";
 import {
-  normalizeOpenwaBaseUrl,
+  configuredOpenwaBaseUrl,
   parseWhatsAppDestinations,
 } from "./whatsapp";
 
@@ -46,9 +47,8 @@ export interface Settings {
   gmailUser: string;
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
-  openwaBaseUrl: string;
   openwaSessionId: string;
-  hasOpenwaApiKey: boolean;
+  whatsappGatewayReady: boolean;
   whatsappAdminDestination: string;
   intervalMinutes: number;
   heartbeatEnabled: boolean;
@@ -63,10 +63,11 @@ export interface Settings {
 export interface SettingsInput
   extends Omit<
     Settings,
-    "hasGmailAppPassword" | "hasOpenwaApiKey" | "lastHeartbeatAt"
+    | "hasGmailAppPassword"
+    | "whatsappGatewayReady"
+    | "lastHeartbeatAt"
   > {
   gmailAppPassword?: string;
-  openwaApiKey?: string;
 }
 
 export type NotificationKind = "appointment" | "heartbeat" | "failure" | "test";
@@ -138,7 +139,6 @@ function normalizeEmailList(value: unknown): string {
 const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
-  openwa_base_url: "",
   openwa_session_id: "",
   whatsapp_admin_destination: "",
   interval_minutes: "5",
@@ -152,7 +152,16 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 
 const profileSecretContext = (id: number) => `profile:${id}:visa_password`;
 const GMAIL_SECRET_CONTEXT = "setting:gmail_app_password";
-const OPENWA_SECRET_CONTEXT = "setting:openwa_api_key";
+
+function readOpenwaApiKeyFile(): string {
+  const file = process.env.OPENWA_API_KEY_FILE?.trim();
+  if (!file) return "";
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
 
 export class ValidationError extends Error {}
 
@@ -299,6 +308,10 @@ export class Store {
       await this.db.exec("ALTER TABLE notification ADD COLUMN dedupe_key TEXT");
     }
 
+    await this.db.run(
+      "DELETE FROM setting WHERE key IN ('openwa_base_url', 'openwa_api_key')",
+    );
+
     await this.verifyMasterKey();
   }
 
@@ -347,9 +360,10 @@ export class Store {
       gmailUser: await this.getSetting("gmail_user"),
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
-      openwaBaseUrl: await this.getSetting("openwa_base_url"),
       openwaSessionId: await this.getSetting("openwa_session_id"),
-      hasOpenwaApiKey: !!(await this.getRawSetting("openwa_api_key")),
+      whatsappGatewayReady: !!(
+        configuredOpenwaBaseUrl() && readOpenwaApiKeyFile()
+      ),
       whatsappAdminDestination: await this.getSetting(
         "whatsapp_admin_destination",
       ),
@@ -379,10 +393,6 @@ export class Store {
       normalizeEmailList(input.emailAdminDestination),
     );
     try {
-      await this.setRawSetting(
-        "openwa_base_url",
-        normalizeOpenwaBaseUrl(input.openwaBaseUrl),
-      );
       await this.setRawSetting(
         "whatsapp_admin_destination",
         parseWhatsAppDestinations(input.whatsappAdminDestination),
@@ -427,12 +437,6 @@ export class Store {
         this.box.encrypt(input.gmailAppPassword, GMAIL_SECRET_CONTEXT),
       );
     }
-    if (input.openwaApiKey) {
-      await this.setRawSetting(
-        "openwa_api_key",
-        this.box.encrypt(input.openwaApiKey, OPENWA_SECRET_CONTEXT),
-      );
-    }
     return this.getSettings();
   }
 
@@ -449,8 +453,11 @@ export class Store {
   }
 
   async getOpenwaApiKey(): Promise<string> {
-    const encrypted = await this.getRawSetting("openwa_api_key");
-    return encrypted ? this.box.decrypt(encrypted, OPENWA_SECRET_CONTEXT) : "";
+    return readOpenwaApiKeyFile();
+  }
+
+  async setOpenwaSessionId(sessionId: string): Promise<void> {
+    await this.setRawSetting("openwa_session_id", sessionId.trim());
   }
 
   // ---- Admin password ----
