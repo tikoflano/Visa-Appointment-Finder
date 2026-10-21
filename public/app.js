@@ -680,17 +680,11 @@ function stopOpenwaPoll() {
   }
 }
 
-function syncOpenwaSessionIdField() {
-  const input = named(settingsForm, "openwaSessionId");
-  input.hidden = !String(input.value || "").trim();
-}
-
 function resetOpenwaLinkUi() {
   stopOpenwaPoll();
   $("#openwa-session-status").textContent = "Not linked";
   $("#openwa-qr-panel").hidden = true;
   $("#openwa-qr").removeAttribute("src");
-  syncOpenwaSessionIdField();
 }
 
 function openwaStatusLabel(session) {
@@ -715,7 +709,6 @@ function applyOpenwaLink(result) {
   if (result?.session?.id) {
     named(settingsForm, "openwaSessionId").value = result.session.id;
   }
-  syncOpenwaSessionIdField();
   $("#openwa-session-status").textContent = openwaStatusLabel(result?.session);
   const qr = $("#openwa-qr");
   const panel = $("#openwa-qr-panel");

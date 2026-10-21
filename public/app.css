@@ -519,11 +519,6 @@ sl-dialog::part(footer) {
   max-width: 70%;
 }
 
-sl-input.openwa-session-id[readonly]::part(base) {
-  background: #f3f5f9;
-  cursor: default;
-}
-
 .openwa-qr-panel {
   display: flex;
   flex-direction: column;

@@ -246,15 +246,7 @@
             <fieldset>
               <legend>WhatsApp</legend>
               <div class="grid">
-                <sl-input class="wide openwa-session-id" name="openwaSessionId" readonly hidden>
-                  <span slot="label" class="label-text">
-                    OpenWA session id
-                    <sl-tooltip placement="bottom">
-                      <span slot="content">Written by Link WhatsApp and kept read-only so it cannot be overwritten by accident. This is the session UUID, not the display name.</span>
-                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA session id"></sl-icon-button>
-                    </sl-tooltip>
-                  </span>
-                </sl-input>
+                <input type="hidden" name="openwaSessionId" />
                 <div class="check-row wide fieldset-actions">
                   <span id="openwa-session-status" class="hint">Not linked</span>
                   <sl-button id="link-openwa" type="button" size="small">Link WhatsApp</sl-button>
