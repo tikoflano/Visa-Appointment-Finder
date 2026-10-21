@@ -1056,12 +1056,6 @@ let notesCache = [];
 let notesLoadGen = 0;
 let expandedNoteId = null;
 
-function notificationKindLabel(kind) {
-  if (kind === "heartbeat") return "heartbeat";
-  if (kind === "failure") return "failure alarm";
-  return "appointment";
-}
-
 function notificationKindBadge(kind) {
   if (kind === "heartbeat") return badge("heartbeat", "info");
   if (kind === "failure") return badge("failure", "bad");
@@ -1083,15 +1077,9 @@ function updateNotesClearButton() {
 
 function notificationDetail(note) {
   const rows = [
-    ["When", formatTimestamp(note.sentAt) || "—"],
-    ["Kind", notificationKindLabel(note.kind)],
-    ["Status", note.status],
-    ["Profile", note.profileName || "—"],
     ["Recipients", note.recipients || "—"],
     ["Subject", note.subject || "—"],
-    ["Summary", note.summary || "—"],
   ];
-  if (note.error) rows.push(["Error", note.error]);
   return el(
     "table",
     { class: "run-result" },
@@ -1108,7 +1096,7 @@ function renderNotificationRows(emptyMessage) {
         {},
         el(
           "td",
-          { class: "sub", colspan: "5" },
+          { class: "sub", colspan: "4" },
           emptyMessage || (notesFilterActive() ? "No notifications in this range" : "No notifications yet"),
         ),
       ),
@@ -1125,7 +1113,6 @@ function renderNotificationRows(emptyMessage) {
         el("td", { class: "mono nowrap" }, formatTimestamp(note.sentAt)),
         el("td", {}, notificationKindBadge(note.kind)),
         el("td", {}, note.profileName || el("span", { class: "hint" }, "—")),
-        el("td", {}, note.subject || "—"),
         el("td", {}, badge(note.status, note.status === "sent" ? "ok" : "bad")),
       ),
     );
@@ -1134,7 +1121,7 @@ function renderNotificationRows(emptyMessage) {
         el(
           "tr",
           { class: "run-detail" },
-          el("td", { colspan: "5" }, notificationDetail(note)),
+          el("td", { colspan: "4" }, notificationDetail(note)),
         ),
       );
     }

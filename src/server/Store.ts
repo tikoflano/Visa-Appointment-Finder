@@ -263,7 +263,6 @@ export class Store {
       await this.db.exec("ALTER TABLE run ADD COLUMN result TEXT");
     }
 
-    await this.backfillNotifications();
     await this.verifyMasterKey();
   }
 
@@ -1007,48 +1006,6 @@ export class Store {
       recentRuns,
       anySuccess: recentRuns.some((run) => run.status === "success"),
     };
-  }
-
-  private async backfillNotifications(): Promise<void> {
-    if ((await this.getRawSetting("notification_backfill")) === "1") return;
-
-    await this.db.run(
-      `INSERT INTO notification
-         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
-       SELECT
-         COALESCE(r.finished_at, r.started_at),
-         'appointment',
-         'email',
-         'sent',
-         r.profile_id,
-         r.id,
-         COALESCE(p.email_destination, ''),
-         'Visa appointment available',
-         'Imported from a previous appointment email',
-         NULL
-       FROM run r
-       LEFT JOIN profile p ON p.id = r.profile_id
-       WHERE json_extract(r.result, '$.notified') = 1`,
-    );
-
-    await this.db.run(
-      `INSERT INTO notification
-         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
-       SELECT
-         timestamp,
-         'heartbeat',
-         'email',
-         'sent',
-         NULL,
-         NULL,
-         '',
-         'Visa appointment scheduler is running',
-         'Imported from a previous heartbeat',
-         NULL
-       FROM heartbeat_notification`,
-    );
-
-    await this.setRawSetting("notification_backfill", "1");
   }
 
   private toNotification(row: any): NotificationRecord {
