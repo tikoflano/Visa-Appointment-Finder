@@ -66,7 +66,11 @@ function formatDate(iso) {
 }
 
 function formatTimestamp(iso) {
-  return iso ? new Date(iso).toLocaleString() : "";
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(+date)) return String(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function toDatetimeLocalValue(date) {
