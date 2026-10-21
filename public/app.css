@@ -676,12 +676,38 @@ table.run-result th {
   background: transparent;
 }
 
-.date-list {
-  margin: 0;
-  padding-left: 1.2em;
+sl-dialog.dates-dialog::part(body) {
+  overflow: auto;
+}
+
+.dates-calendar .calendar-cell {
+  min-height: 2.2rem;
+  align-items: center;
+  padding: 3px;
+}
+
+.dates-calendar .calendar-daynum {
+  width: 1.7rem;
+  height: 1.7rem;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.dates-calendar .calendar-cell.hit .calendar-daynum {
+  background: var(--chip-color, #2457d6);
+  color: #fff;
+}
+
+.dates-calendar .calendar-cell.hit {
+  --chip-color: #2457d6;
+}
+
+#dates-prev.has-more::part(base),
+#dates-next.has-more::part(base) {
+  box-shadow: inset 0 0 0 2px #2457d6;
+  color: #2457d6;
 }
 
 pre.run-debug,

@@ -882,13 +882,100 @@ function updateRunsClearButton() {
   runsClearFilter.disabled = !runsFilterActive();
 }
 
-function openAvailableDates(dates) {
-  const items = (dates || []).map((iso) => el("li", {}, formatDate(iso) || iso));
-  $("[data-dates]", datesDialog).replaceChildren(
-    ...(items.length ? items : [el("li", { class: "sub" }, "No dates")]),
-  );
-  datesDialog.show();
+let datesCursor = { year: new Date().getFullYear(), month: new Date().getMonth() };
+let datesAvailable = new Set();
+
+function isoYearMonth(iso) {
+  const [year, month] = String(iso || "").split("-").map(Number);
+  if (!year || !month) return null;
+  return { year, month: month - 1 };
 }
+
+function monthIndex(year, month) {
+  return year * 12 + month;
+}
+
+function datesOutsideMonth(cursor, direction) {
+  const current = monthIndex(cursor.year, cursor.month);
+  let count = 0;
+  for (const iso of datesAvailable) {
+    const ym = isoYearMonth(iso);
+    if (!ym) continue;
+    const key = monthIndex(ym.year, ym.month);
+    if (direction < 0 && key < current) count += 1;
+    if (direction > 0 && key > current) count += 1;
+  }
+  return count;
+}
+
+function markDatesNav(button, count, earlier) {
+  const base = earlier ? "Previous" : "Next";
+  button.textContent = count ? `${base} · ${count}` : base;
+  button.classList.toggle("has-more", count > 0);
+  button.title = count
+    ? `${count} matching ${count === 1 ? "date" : "dates"} in ${
+        earlier ? "earlier" : "later"
+      } months`
+    : "";
+}
+
+function renderDatesCalendar() {
+  const { year, month } = datesCursor;
+  $("[data-dates-title]", datesDialog).textContent = new Date(
+    year,
+    month,
+    1,
+  ).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const count = datesAvailable.size;
+  $("[data-dates-hint]", datesDialog).textContent = count
+    ? `${count} matching ${count === 1 ? "date" : "dates"}`
+    : "No dates";
+  markDatesNav($("#dates-prev"), datesOutsideMonth(datesCursor, -1), true);
+  markDatesNav($("#dates-next"), datesOutsideMonth(datesCursor, 1), false);
+  const today = localIsoDate();
+  const nodes = WEEKDAYS.map((label) => el("div", { class: "calendar-weekday" }, label));
+  for (const cell of monthCells(year, month)) {
+    const hit = datesAvailable.has(cell.iso);
+    nodes.push(
+      el(
+        "div",
+        {
+          class: `calendar-cell${cell.outside ? " outside" : ""}${
+            cell.iso === today ? " today" : ""
+          }${hit ? " hit" : ""}`,
+          title: hit ? formatDate(cell.iso) || cell.iso : "",
+        },
+        el("div", { class: "calendar-daynum" }, String(cell.day)),
+      ),
+    );
+  }
+  $("[data-dates]", datesDialog).replaceChildren(...nodes);
+}
+
+function shiftDatesCalendar(delta) {
+  const date = new Date(datesCursor.year, datesCursor.month + delta, 1);
+  datesCursor = { year: date.getFullYear(), month: date.getMonth() };
+  renderDatesCalendar();
+}
+
+function openAvailableDates(dates) {
+  datesAvailable = new Set((dates || []).filter(Boolean));
+  const first = [...datesAvailable].sort()[0];
+  datesCursor = isoYearMonth(first) || {
+    year: new Date().getFullYear(),
+    month: new Date().getMonth(),
+  };
+  datesDialog.show();
+  renderDatesCalendar();
+}
+
+$("#dates-prev").addEventListener("click", () => shiftDatesCalendar(-1));
+$("#dates-next").addEventListener("click", () => shiftDatesCalendar(1));
+$("#dates-today").addEventListener("click", () => {
+  const now = new Date();
+  datesCursor = { year: now.getFullYear(), month: now.getMonth() };
+  renderDatesCalendar();
+});
 
 function fillErrorDialog(run) {
   $("[data-error-when]", errorDialog).textContent = run.startedAt

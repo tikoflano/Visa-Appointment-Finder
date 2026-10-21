@@ -449,8 +449,15 @@
       </div>
     </sl-dialog>
 
-    <sl-dialog id="dates-dialog" label="Available dates">
-      <ul class="date-list" data-dates></ul>
+    <sl-dialog id="dates-dialog" class="dates-dialog" label="Available dates">
+      <div class="calendar-toolbar">
+        <sl-button id="dates-prev" size="small">Previous</sl-button>
+        <h2 class="calendar-title" data-dates-title>Month</h2>
+        <sl-button id="dates-today" size="small">Today</sl-button>
+        <sl-button id="dates-next" size="small">Next</sl-button>
+      </div>
+      <p class="sub calendar-hint" data-dates-hint></p>
+      <div class="calendar-grid dates-calendar" data-dates></div>
       <div slot="footer" class="dialog-actions">
         <sl-button data-close>Close</sl-button>
       </div>
