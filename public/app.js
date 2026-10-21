@@ -451,7 +451,11 @@ function renderProfiles() {
           { class: "nowrap" },
           profile.currentAppointmentDate
             ? formatDate(profile.currentAppointmentDate)
-            : el("span", { class: "hint" }, "unknown"),
+            : el(
+                "span",
+                { class: "hint" },
+                profile.hasSuccessfulRun ? "none" : "unknown",
+              ),
         ),
         el("td", { class: "nowrap" }, dateWindow(profile)),
         el(

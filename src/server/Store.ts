@@ -822,6 +822,13 @@ export class Store {
     return new Map(rows.map((row) => [row.profile_id, this.toRun(row)]));
   }
 
+  async getProfilesWithSuccessfulRuns(): Promise<Set<number>> {
+    const rows = (await this.db.all(
+      "SELECT DISTINCT profile_id FROM run WHERE status = 'success'",
+    )) as { profile_id: number }[];
+    return new Set(rows.map((row) => row.profile_id));
+  }
+
   async listRuns(
     profileId: number | null,
     limit: number,

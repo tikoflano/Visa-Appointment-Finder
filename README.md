@@ -169,7 +169,7 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and icon actions (run/stop, runs, edit, delete). Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last.
+The table lists every profile: enabled switch, name, **current appointment**, **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and icon actions (run/stop, runs, edit, delete). Current appointment is the booked AIS date when we have one; **none** after a successful check found no booking; **unknown** until a successful run. Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last.
 
 - **New profile** — visa account email/password, process ID, date window, notify and/or reschedule. Toolbar buttons are icons (new profile, all runs, calendar, notifications, settings, sign out).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Enable is refused if the date window overlaps another enabled profile (notify included — two people should not hunt the same days). An empty latest date needs a stored booked appointment from a prior run, or set a latest date.

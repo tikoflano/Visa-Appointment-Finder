@@ -317,11 +317,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "GET",
       pattern: /^\/api\/profiles$/,
       handler: async () => {
-        const [profiles, latestRuns, settings] = await Promise.all([
-          store.listProfiles(),
-          store.getLatestRuns(),
-          store.getSettings(),
-        ]);
+        const [profiles, latestRuns, successfulRuns, settings] =
+          await Promise.all([
+            store.listProfiles(),
+            store.getLatestRuns(),
+            store.getProfilesWithSuccessfulRuns(),
+            store.getSettings(),
+          ]);
         const intervalMs = settings.intervalMinutes * 60 * 1000;
         return profiles.map((profile) => {
           const lastRun = latestRuns.get(profile.id) ?? null;
@@ -334,6 +336,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
             ...profile,
             state: scheduler.getState(profile.id),
             lastRun,
+            hasSuccessfulRun: successfulRuns.has(profile.id),
             nextRunAt: Scheduler.nextRunAt(
               profile.enabled,
               lastRun?.startedAt,
