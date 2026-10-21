@@ -745,7 +745,6 @@ $("#open-settings").addEventListener("click", async () => {
     "openwaSessionId",
     "whatsappAdminDestination",
     "intervalMinutes",
-    "heartbeatMinutes",
     "maxConcurrentRuns",
     "runTimeoutMinutes",
     "failureAlarmThreshold",
@@ -756,6 +755,10 @@ $("#open-settings").addEventListener("click", async () => {
     ? "Leave empty to keep the stored password"
     : "Not set";
   named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
+  named(settingsForm, "heartbeatTime").value = utcTimeToLocal(
+    settings.heartbeatTimeUtc || "00:00",
+  );
+  syncHeartbeatTimeHint();
   named(settingsForm, "emailEnabled").checked = !!settings.emailEnabled;
   named(settingsForm, "whatsappEnabled").checked = !!settings.whatsappEnabled;
   named(settingsForm, "botDebug").checked = !!settings.botDebug;
@@ -772,6 +775,53 @@ function lastHeartbeatLabel(iso) {
   if (!iso) return "Last sent: never";
   return `Last sent: ${formatTimestamp(iso)} (${relativeTime(iso)})`;
 }
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function utcTimeToLocal(utc) {
+  const match = /^(\d{2}):(\d{2})/.exec(utc || "");
+  if (!match) return "";
+  const now = new Date();
+  const instant = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      Number(match[1]),
+      Number(match[2]),
+    ),
+  );
+  return `${pad2(instant.getHours())}:${pad2(instant.getMinutes())}`;
+}
+
+function localTimeToUtc(local) {
+  const match = /^(\d{2}):(\d{2})/.exec(local || "");
+  if (!match) return "00:00";
+  const now = new Date();
+  const instant = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    Number(match[1]),
+    Number(match[2]),
+    0,
+    0,
+  );
+  return `${pad2(instant.getUTCHours())}:${pad2(instant.getUTCMinutes())}`;
+}
+
+function syncHeartbeatTimeHint() {
+  const local = named(settingsForm, "heartbeatTime").value;
+  const utc = localTimeToUtc(local);
+  $("#heartbeat-time-utc").textContent = local
+    ? `Sends at ${utc} UTC`
+    : "Empty uses 00:00 UTC";
+}
+
+named(settingsForm, "heartbeatTime").addEventListener("sl-input", syncHeartbeatTimeHint);
+named(settingsForm, "heartbeatTime").addEventListener("sl-change", syncHeartbeatTimeHint);
 
 let openwaPollTimer = 0;
 
@@ -984,7 +1034,7 @@ settingsForm.addEventListener("submit", async (event) => {
       whatsappEnabled: named(form, "whatsappEnabled").checked,
       intervalMinutes: Number(named(form, "intervalMinutes").value),
       heartbeatEnabled: named(form, "heartbeatEnabled").checked,
-      heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
+      heartbeatTimeUtc: localTimeToUtc(named(form, "heartbeatTime").value),
       maxConcurrentRuns: Number(named(form, "maxConcurrentRuns").value),
       runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
       failureAlarmThreshold: Number(named(form, "failureAlarmThreshold").value),

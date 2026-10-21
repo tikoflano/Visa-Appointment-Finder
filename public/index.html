@@ -306,23 +306,24 @@
                   </sl-tooltip>
                 </span>
               </sl-input>
-              <sl-input name="heartbeatMinutes" type="number" min="1" required>
+              <sl-input name="heartbeatTime" type="time">
                 <span slot="label" class="label-text">
-                  Heartbeat every (minutes)
+                  Heartbeat time
                   <sl-tooltip placement="bottom">
-                    <span slot="content">Minimum minutes between heartbeat notifications. Default 1440 (once a day).</span>
-                    <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
+                    <span slot="content">Local time of day for the daily heartbeat. Saved as UTC, so the server's timezone does not matter. Leave empty for 00:00 UTC. A failed send retries after 1, 5, and 10 minutes and does not move the next day's time.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat time"></sl-icon-button>
                   </sl-tooltip>
                 </span>
               </sl-input>
               <div class="check-row wide">
                 <sl-checkbox name="heartbeatEnabled">Send heartbeat notifications</sl-checkbox>
                 <sl-tooltip placement="bottom">
-                  <span slot="content">Sends to admin emails and WhatsApp numbers at most once per heartbeat interval, even if no profile ran. Lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
+                  <span slot="content">Sends to admin emails and WhatsApp numbers once a day at the heartbeat time, even if no profile ran. Lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
                   <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat notifications"></sl-icon-button>
                 </sl-tooltip>
               </div>
               <div class="check-row wide heartbeat-status">
+                <span id="heartbeat-time-utc" class="hint">Sends at 00:00 UTC</span>
                 <span id="last-heartbeat" class="hint">Last sent: never</span>
                 <sl-button id="send-heartbeat" type="button" size="small">Send now</sl-button>
               </div>

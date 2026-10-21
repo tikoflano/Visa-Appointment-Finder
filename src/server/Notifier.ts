@@ -26,6 +26,30 @@ import {
 } from "./whatsapp";
 
 const TICK_MS = 15 * 1000;
+const HEARTBEAT_RETRY_BACKOFF_MINUTES = [1, 5, 10];
+
+export function latestHeartbeatSlot(now: Date, timeUtc: string): Date {
+  const match = /^(\d{2}):(\d{2})$/.exec(timeUtc) || ["", "00", "00"];
+  const slot = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      Number(match[1]),
+      Number(match[2]),
+      0,
+      0,
+    ),
+  );
+  if (slot.getTime() > now.getTime()) {
+    slot.setUTCDate(slot.getUTCDate() - 1);
+  }
+  return slot;
+}
+
+export function heartbeatRetryDelayMinutes(attemptNumber: number): number | null {
+  return HEARTBEAT_RETRY_BACKOFF_MINUTES[attemptNumber - 1] ?? null;
+}
 
 function normalizeEmailList(value: unknown): string {
   return String(value ?? "")
@@ -554,40 +578,75 @@ export class Notifier {
         }
         throw new ValidationError("OpenWA is not configured");
       }
-    } else {
-      if (!settings.heartbeatEnabled) {
-        return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
-      }
-      if (!emailReady && !whatsappReady) {
-        console.warn(
-          "Heartbeat is enabled but neither Gmail nor OpenWA is configured",
-        );
-        return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
-      }
-      if (!adminEmail && !adminWhatsapp.length) {
-        console.warn(
-          "Heartbeat is enabled but no admin notification emails or WhatsApp numbers are set",
-        );
-        return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
-      }
-      if (settings.lastHeartbeatAt) {
-        const elapsedMinutes = Math.floor(
-          (Date.now() - +new Date(settings.lastHeartbeatAt)) / 60000,
-        );
-        if (elapsedMinutes < settings.heartbeatMinutes) {
-          return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
-        }
-      }
+      await this.deliverHeartbeat({
+        emailReady,
+        whatsappReady,
+        adminEmail,
+        adminWhatsapp,
+        settings,
+      });
+      await this.store.insertHeartbeatStamp();
+      return { sent: true, lastHeartbeatAt: await this.store.getLastHeartbeatAt() };
     }
 
-    const claimed = await this.store.claimHeartbeatIfDue(
-      settings.heartbeatMinutes,
-      !!options.force,
-    );
-    if (!claimed) {
+    if (!settings.heartbeatEnabled) {
+      return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
+    }
+    if (!emailReady && !whatsappReady) {
+      console.warn(
+        "Heartbeat is enabled but neither Gmail nor OpenWA is configured",
+      );
+      return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
+    }
+    if (!adminEmail && !adminWhatsapp.length) {
+      console.warn(
+        "Heartbeat is enabled but no admin notification emails or WhatsApp numbers are set",
+      );
       return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
     }
 
+    const now = new Date();
+    const slot = latestHeartbeatSlot(now, settings.heartbeatTimeUtc || "00:00");
+    const slotIso = slot.toISOString();
+    const claim = await this.store.beginScheduledHeartbeat(slotIso, now);
+    if (!claim.send) {
+      return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
+    }
+
+    try {
+      await this.deliverHeartbeat({
+        emailReady,
+        whatsappReady,
+        adminEmail,
+        adminWhatsapp,
+        settings,
+      });
+    } catch (error) {
+      const delay = heartbeatRetryDelayMinutes(claim.attemptNumber);
+      const nextAttemptAt = delay
+        ? new Date(Date.now() + delay * 60000).toISOString()
+        : "";
+      await this.store.recordHeartbeatRetry(
+        slotIso,
+        claim.attemptNumber,
+        nextAttemptAt,
+      );
+      throw error;
+    }
+
+    await this.store.recordScheduledHeartbeatSent(slotIso);
+    return { sent: true, lastHeartbeatAt: await this.store.getLastHeartbeatAt() };
+  }
+
+  private async deliverHeartbeat(options: {
+    emailReady: boolean;
+    whatsappReady: boolean;
+    adminEmail: string;
+    adminWhatsapp: string[];
+    settings: Settings;
+  }): Promise<void> {
+    const { emailReady, whatsappReady, adminEmail, adminWhatsapp, settings } =
+      options;
     const report = await this.store.getHeartbeatReport();
     const content = composeHeartbeatNotification({ report });
     let anySent = false;
@@ -643,7 +702,6 @@ export class Notifier {
     if (!anySent) {
       throw new Error(lastError || "Heartbeat could not be sent");
     }
-    return { sent: true, lastHeartbeatAt: await this.store.getLastHeartbeatAt() };
   }
 
   private tick(): void {

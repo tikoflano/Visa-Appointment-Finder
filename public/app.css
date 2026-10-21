@@ -554,6 +554,10 @@ sl-dialog::part(footer) {
   justify-content: space-between;
 }
 
+.heartbeat-status {
+  flex-wrap: wrap;
+}
+
 .fieldset-actions .hint {
   max-width: 70%;
 }

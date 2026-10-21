@@ -58,6 +58,7 @@ export interface Settings {
   intervalMinutes: number;
   heartbeatEnabled: boolean;
   heartbeatMinutes: number;
+  heartbeatTimeUtc: string;
   lastHeartbeatAt: string | null;
   maxConcurrentRuns: number;
   runTimeoutMinutes: number;
@@ -71,8 +72,14 @@ export interface SettingsInput
     | "hasGmailAppPassword"
     | "whatsappGatewayReady"
     | "lastHeartbeatAt"
+    | "heartbeatMinutes"
+    | "heartbeatTimeUtc"
   > {
   gmailAppPassword?: string;
+  /** Kept for older clients. Scheduling uses heartbeatTimeUtc instead. */
+  heartbeatMinutes?: number;
+  /** HH:MM in UTC. Empty or omitted keeps the stored value; blank string stores 00:00. */
+  heartbeatTimeUtc?: string;
 }
 
 export type NotificationKind = "appointment" | "heartbeat" | "failure" | "test";
@@ -139,6 +146,21 @@ function integerOrNull(value: unknown): number | null {
   return null;
 }
 
+function normalizeHeartbeatTimeUtc(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "00:00";
+  const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (!match) {
+    throw new ValidationError("Heartbeat time must be HH:MM in UTC");
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) {
+    throw new ValidationError("Heartbeat time must be HH:MM in UTC");
+  }
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 function normalizeEmailList(value: unknown): string {
   return String(value ?? "")
     .split(",")
@@ -157,6 +179,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   interval_minutes: "5",
   heartbeat_enabled: "1",
   heartbeat_minutes: "1440",
+  heartbeat_time_utc: "00:00",
   max_concurrent_runs: "2",
   run_timeout_minutes: "5",
   failure_alarm_threshold: "3",
@@ -401,6 +424,7 @@ export class Store {
       intervalMinutes: Number(await this.getSetting("interval_minutes")),
       heartbeatEnabled: (await this.getSetting("heartbeat_enabled")) === "1",
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
+      heartbeatTimeUtc: await this.getSetting("heartbeat_time_utc"),
       lastHeartbeatAt: await this.getLastHeartbeatAt(),
       maxConcurrentRuns: Number(await this.getSetting("max_concurrent_runs")),
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
@@ -455,9 +479,17 @@ export class Store {
       "heartbeat_enabled",
       input.heartbeatEnabled ? "1" : "0",
     );
+    if (input.heartbeatMinutes !== undefined) {
+      await this.setRawSetting(
+        "heartbeat_minutes",
+        positiveInt(input.heartbeatMinutes, "Heartbeat interval"),
+      );
+    }
     await this.setRawSetting(
-      "heartbeat_minutes",
-      positiveInt(input.heartbeatMinutes, "Heartbeat interval"),
+      "heartbeat_time_utc",
+      input.heartbeatTimeUtc === undefined
+        ? await this.getSetting("heartbeat_time_utc")
+        : normalizeHeartbeatTimeUtc(input.heartbeatTimeUtc),
     );
     await this.setRawSetting(
       "max_concurrent_runs",
@@ -1146,32 +1178,46 @@ export class Store {
     return !gap;
   }
 
-  async claimHeartbeatIfDue(
-    intervalMinutes: number,
-    force = false,
-  ): Promise<boolean> {
+  /**
+   * Claim today's UTC heartbeat slot. A failed send keeps the next day's
+   * clock time and only delays the retries for this slot.
+   */
+  async beginScheduledHeartbeat(
+    slotIso: string,
+    now: Date,
+  ): Promise<{ send: true; attemptNumber: number } | { send: false }> {
+    const maxAttempts = 4;
     await this.db.exec("BEGIN IMMEDIATE");
     try {
-      if (!force) {
-        const last = await this.db.get<{ timestamp: string }>(
-          "SELECT timestamp FROM heartbeat_notification ORDER BY id DESC LIMIT 1",
-        );
-        if (last) {
-          const elapsedMinutes = Math.floor(
-            (Date.now() - +new Date(last.timestamp)) / 60000,
-          );
-          if (elapsedMinutes < intervalMinutes) {
-            await this.db.exec("COMMIT");
-            return false;
-          }
-        }
+      const sentSlot = await this.getRawSetting("heartbeat_sent_slot");
+      if (sentSlot === slotIso) {
+        await this.db.exec("COMMIT");
+        return { send: false };
       }
-      await this.db.run(
-        "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
-        [null],
-      );
+      const attemptSlot = await this.getRawSetting("heartbeat_attempt_slot");
+      const sameSlot = attemptSlot === slotIso;
+      const attempts = sameSlot
+        ? Number(await this.getRawSetting("heartbeat_attempt_count")) || 0
+        : 0;
+      const nextAt = sameSlot
+        ? await this.getRawSetting("heartbeat_next_attempt_at")
+        : undefined;
+      if (attempts >= maxAttempts) {
+        await this.db.exec("COMMIT");
+        return { send: false };
+      }
+      if (nextAt && Date.parse(nextAt) > now.getTime()) {
+        await this.db.exec("COMMIT");
+        return { send: false };
+      }
+      const lease = new Date(now.getTime() + 20 * 60000).toISOString();
+      await this.setRawSetting("heartbeat_attempt_slot", slotIso);
+      if (!sameSlot) {
+        await this.setRawSetting("heartbeat_attempt_count", "0");
+      }
+      await this.setRawSetting("heartbeat_next_attempt_at", lease);
       await this.db.exec("COMMIT");
-      return true;
+      return { send: true, attemptNumber: attempts + 1 };
     } catch (error) {
       try {
         await this.db.exec("ROLLBACK");
@@ -1180,6 +1226,45 @@ export class Store {
       }
       throw error;
     }
+  }
+
+  async recordHeartbeatRetry(
+    slotIso: string,
+    attemptNumber: number,
+    nextAttemptAt: string,
+  ): Promise<void> {
+    await this.setRawSetting("heartbeat_attempt_slot", slotIso);
+    await this.setRawSetting("heartbeat_attempt_count", String(attemptNumber));
+    await this.setRawSetting("heartbeat_next_attempt_at", nextAttemptAt);
+  }
+
+  async recordScheduledHeartbeatSent(slotIso: string): Promise<void> {
+    await this.db.exec("BEGIN IMMEDIATE");
+    try {
+      await this.setRawSetting("heartbeat_sent_slot", slotIso);
+      await this.setRawSetting("heartbeat_attempt_slot", slotIso);
+      await this.setRawSetting("heartbeat_attempt_count", "0");
+      await this.setRawSetting("heartbeat_next_attempt_at", "");
+      await this.db.run(
+        "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
+        [null],
+      );
+      await this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        await this.db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
+      }
+      throw error;
+    }
+  }
+
+  async insertHeartbeatStamp(): Promise<void> {
+    await this.db.run(
+      "INSERT INTO heartbeat_notification (visa_process_id) VALUES (?)",
+      [null],
+    );
   }
 
   async getHeartbeatReport(): Promise<{
