@@ -152,10 +152,10 @@ function parseNotificationKind(
 
 function parseNotificationStatus(
   value: string | null,
-): "sent" | "failed" | undefined {
+): "sent" | "failed" | "skipped" | undefined {
   const raw = value?.trim().toLowerCase();
   if (!raw) return undefined;
-  if (raw === "sent" || raw === "failed") return raw;
+  if (raw === "sent" || raw === "failed" || raw === "skipped") return raw;
   throw new HttpError(400, "Invalid status");
 }
 
@@ -617,7 +617,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       throw Error("VISA_DEV is only allowed when HOST is 127.0.0.1");
     }
     console.warn(
-      `Dev mode — login skipped, scheduler and notifier off. Open ${VITE_ORIGIN}`,
+      `Dev mode — login skipped; scheduled checks and automatic heartbeats off. Open ${VITE_ORIGIN}`,
     );
   } else {
     await scheduler.start();

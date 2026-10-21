@@ -18,7 +18,7 @@ tsc
 echo "Dev UI (HMR): http://127.0.0.1:$vite_port"
 echo "API:          127.0.0.1:$api_port inside this container (proxied by Vite)"
 echo "OpenWA:       http://openwa:2785 on the visa network"
-echo "Login skipped, scheduler off."
+echo "Login skipped. Scheduled checks and automatic heartbeats off. Run now still notifies."
 
 tsc --watch --preserveWatchOutput --pretty false &
 tsc_pid=$!

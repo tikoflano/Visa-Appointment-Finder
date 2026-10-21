@@ -224,13 +224,61 @@ function startSessionMock(apiKey, qrCode) {
   const second = await notifier.notifyForRun(profile.id, 2, "success", result);
   assert(second.notified === false, "same dates should be debounced");
   assert(mock.received.length === 2, "debounce should not send again");
+  const skippedNotes = await store.listNotifications(20, {
+    channel: "whatsapp",
+    status: "skipped",
+  });
+  assert(
+    skippedNotes.some(
+      (note) => note.kind === "appointment" && note.status === "skipped",
+    ),
+    "skipped appointment should be logged",
+  );
+
+  const errorRun = await store.createRun(profile.id, "manual");
+  await store.finishRun(errorRun, "failed", 1, "", {
+    ok: false,
+    outcome: "error",
+    currentAppointment: null,
+    dates: [],
+    error: "login failed",
+    notified: false,
+    rescheduled: false,
+  });
+  const afterError = await notifier.notifyForRun(
+    profile.id,
+    errorRun,
+    "success",
+    result,
+  );
+  assert(afterError.notified === false, "error run should not reset dedupe");
+  assert(mock.received.length === 2, "error run should not send again");
+
+  const noneRun = await store.createRun(profile.id, "manual");
+  await store.finishRun(noneRun, "success", 0, "", {
+    ok: true,
+    outcome: "none",
+    currentAppointment: "2026-12-20",
+    dates: [],
+    error: null,
+    notified: false,
+    rescheduled: false,
+  });
+  const afterGap = await notifier.notifyForRun(
+    profile.id,
+    noneRun,
+    "success",
+    result,
+  );
+  assert(afterGap.notified === true, "same dates after a none-available gap should notify");
+  assert(mock.received.length === 4, `expected 4 sends after gap, got ${mock.received.length}`);
 
   const third = await notifier.notifyForRun(profile.id, 3, "success", {
     ...result,
     dates: ["2026-12-03"],
   });
   assert(third.notified === true, "new earlier date should notify");
-  assert(mock.received.length === 4, `expected 4 sends, got ${mock.received.length}`);
+  assert(mock.received.length === 6, `expected 6 sends, got ${mock.received.length}`);
 
   mock.received.length = 0;
   const heartbeat = await notifier.sendHeartbeat({ force: true });

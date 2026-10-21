@@ -58,6 +58,9 @@ function appointmentDatesKey(dates: string[]): string {
   return [...dates].sort().join(",");
 }
 
+const APPOINTMENT_DEDUPE_REASON =
+  "Same date list as the last successful send on this channel";
+
 export class Notifier {
   private readonly store: Store;
   private timer: NodeJS.Timeout | undefined;
@@ -194,7 +197,8 @@ export class Notifier {
   /**
    * Notify when the profile asked for it and the bot found dates. Returns the
    * result with `notified` set if any channel sent. A send failure leaves the
-   * AIS outcome as-is. Repeat dates are skipped per channel.
+   * AIS outcome as-is. Repeat dates are skipped per channel until a later
+   * successful check finds no matching dates.
    */
   async notifyForRun(
     profileId: number,
@@ -536,12 +540,27 @@ export class Notifier {
   }): Promise<"sent" | "skipped" | "failed"> {
     const { profile, runId, content, datesKey, firstDate, extraDates, to, bcc } =
       options;
-    const previous = await this.store.lastSentDedupeKey(
-      profile.id,
-      "appointment",
-      "email",
-    );
-    if (previous === datesKey) return "skipped";
+    if (
+      await this.store.shouldSkipAppointmentDedupe(
+        profile.id,
+        "email",
+        datesKey,
+      )
+    ) {
+      await this.logNotification({
+        kind: "appointment",
+        channel: "email",
+        status: "skipped",
+        profileId: profile.id,
+        runId,
+        recipients: recipientsList(to, bcc),
+        subject: content.subject,
+        summary: content.summary,
+        error: APPOINTMENT_DEDUPE_REASON,
+        dedupeKey: datesKey,
+      });
+      return "skipped";
+    }
 
     const mailer = await this.mailer();
     if (!mailer) {
@@ -622,12 +641,27 @@ export class Notifier {
       options.profileId &&
       options.datesKey
     ) {
-      const previous = await this.store.lastSentDedupeKey(
-        options.profileId,
-        "appointment",
-        "whatsapp",
-      );
-      if (previous === options.datesKey) return "skipped";
+      if (
+        await this.store.shouldSkipAppointmentDedupe(
+          options.profileId,
+          "whatsapp",
+          options.datesKey,
+        )
+      ) {
+        await this.logNotification({
+          kind: "appointment",
+          channel: "whatsapp",
+          status: "skipped",
+          profileId: options.profileId,
+          runId: options.runId ?? null,
+          recipients: options.recipients,
+          subject: options.subject,
+          summary: options.summary,
+          error: APPOINTMENT_DEDUPE_REASON,
+          dedupeKey: options.datesKey,
+        });
+        return "skipped";
+      }
     }
 
     if (!this.whatsappReady(options.settings)) {

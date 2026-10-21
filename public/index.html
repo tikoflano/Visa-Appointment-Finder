@@ -101,7 +101,7 @@
 
     <section id="app-view" hidden>
       <sl-alert id="dev-banner" variant="warning" hidden>
-        Dev mode: login is skipped and the scheduler and notifier are off. The Docker container on port 3000 is unchanged.
+        Dev mode: login is skipped. Scheduled checks and automatic heartbeats are off. Run now, Test, and Send now still notify. The Docker container on port 3000 is unchanged.
       </sl-alert>
       <sl-alert id="settings-warning" variant="warning" hidden>
         Gmail credentials are not configured, so email notifications and heartbeats can't be sent. Open Settings to add them, or use WhatsApp via OpenWA.
@@ -421,6 +421,7 @@
           <sl-option value="any">Any</sl-option>
           <sl-option value="sent">Sent</sl-option>
           <sl-option value="failed">Failed</sl-option>
+          <sl-option value="skipped">Skipped</sl-option>
         </sl-select>
         <sl-select id="notes-channel" label="Channel" size="small" value="any" hoist>
           <sl-option value="any">Any</sl-option>

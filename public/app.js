@@ -1258,6 +1258,9 @@ function notificationDetail(note) {
     ["Recipients", note.recipients || "—"],
     ["Subject", note.subject || "—"],
   ];
+  if (note.error) {
+    rows.push([note.status === "skipped" ? "Reason" : "Error", note.error]);
+  }
   return el(
     "table",
     { class: "run-result" },
@@ -1292,7 +1295,14 @@ function renderNotificationRows(emptyMessage) {
         el("td", {}, notificationKindBadge(note.kind)),
         el("td", {}, badge(note.channel || "email", note.channel === "whatsapp" ? "ok" : "info")),
         el("td", {}, note.profileName || el("span", { class: "hint" }, "—")),
-        el("td", {}, badge(note.status, note.status === "sent" ? "ok" : "bad")),
+        el(
+          "td",
+          {},
+          badge(
+            note.status,
+            note.status === "sent" ? "ok" : note.status === "skipped" ? "muted" : "bad",
+          ),
+        ),
       ),
     );
     if (expanded) {

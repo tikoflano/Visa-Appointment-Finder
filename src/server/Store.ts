@@ -71,7 +71,7 @@ export interface SettingsInput
 }
 
 export type NotificationKind = "appointment" | "heartbeat" | "failure" | "test";
-export type NotificationStatus = "sent" | "failed";
+export type NotificationStatus = "sent" | "failed" | "skipped";
 
 export interface NotificationInput {
   kind: NotificationKind;
@@ -1054,19 +1054,37 @@ export class Store {
     return rows.map((row) => this.toNotification(row));
   }
 
-  async lastSentDedupeKey(
+  /**
+   * Skip when the last successful appointment send for this profile and
+   * channel used the same date list, and no later successful check found
+   * zero matching dates. A failed send does not count. An error or timeout
+   * does not reset the key.
+   */
+  async shouldSkipAppointmentDedupe(
     profileId: number,
-    kind: NotificationKind,
     channel: string,
-  ): Promise<string | null> {
-    const row = await this.db.get<{ dedupe_key: string | null }>(
-      `SELECT dedupe_key FROM notification
-       WHERE profile_id = ? AND kind = ? AND channel = ? AND status = 'sent'
+    datesKey: string,
+  ): Promise<boolean> {
+    const last = await this.db.get<{ sent_at: string; dedupe_key: string }>(
+      `SELECT sent_at, dedupe_key FROM notification
+       WHERE profile_id = ? AND kind = 'appointment' AND channel = ?
+         AND status = 'sent'
          AND dedupe_key IS NOT NULL AND dedupe_key != ''
        ORDER BY id DESC LIMIT 1`,
-      [profileId, kind, channel],
+      [profileId, channel],
     );
-    return row?.dedupe_key ?? null;
+    if (!last || last.dedupe_key !== datesKey) return false;
+
+    const gap = await this.db.get<{ id: number }>(
+      `SELECT id FROM run
+       WHERE profile_id = ?
+         AND status = 'success'
+         AND finished_at > ?
+         AND json_extract(result, '$.outcome') = 'none'
+       LIMIT 1`,
+      [profileId, last.sent_at],
+    );
+    return !gap;
   }
 
   async claimHeartbeatIfDue(
@@ -1137,7 +1155,10 @@ export class Store {
       sentAt: row.sent_at,
       kind,
       channel: row.channel || "email",
-      status: row.status === "failed" ? "failed" : "sent",
+      status:
+        row.status === "failed" || row.status === "skipped"
+          ? row.status
+          : "sent",
       profileId: row.profile_id ?? null,
       profileName: row.profile_name ?? null,
       runId: row.run_id ?? null,
