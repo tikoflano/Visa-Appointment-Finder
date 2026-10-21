@@ -200,6 +200,7 @@ function actionBadge(action, profile) {
     action,
     action === "reschedule" ? "ok" : action === "notify" ? "warn" : "muted",
   );
+  if (action === "reschedule") return [node, badge("experimental", "warn")];
   if (action !== "notify") return node;
   const lines = notifyAddresses(profile);
   const tip = el(
@@ -651,7 +652,7 @@ profileForm.addEventListener("submit", async (event) => {
     actions.includes("reschedule") &&
     !(editingProfile?.actions || []).includes("reschedule") &&
     !(await confirmAction(
-      "Automatic rescheduling will book the first matching date without asking. Continue?",
+      "Automatic rescheduling is experimental and will book the first matching date without asking. Continue?",
       { okLabel: "Enable reschedule", variant: "warning" },
     ))
   ) {
