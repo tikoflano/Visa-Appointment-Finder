@@ -311,6 +311,19 @@ table {
   border-radius: 10px;
 }
 
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: #fafbfc;
+}
+
+.table-toolbar sl-switch {
+  font-size: 13px;
+}
+
 table.profiles {
   background: var(--card);
   min-width: 78rem;

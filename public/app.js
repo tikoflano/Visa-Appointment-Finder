@@ -23,8 +23,11 @@ const REFRESH_MS = 10000;
 const $ = (selector, root = document) => root.querySelector(selector);
 const named = (form, name) => form.querySelector(`[name="${name}"]`);
 
+const HIDE_DISABLED_KEY = "hideDisabledProfiles";
+
 let profiles = [];
 let checkIntervalMinutes = 5;
+let hideDisabled = localStorage.getItem(HIDE_DISABLED_KEY) === "1";
 let refreshTimer;
 let setupMode = false;
 let confirmResolve;
@@ -111,6 +114,11 @@ function sortedProfiles() {
     if (leftAt !== rightAt) return leftAt - rightAt;
     return String(left.name || "").localeCompare(String(right.name || ""));
   });
+}
+
+function visibleProfiles() {
+  const list = sortedProfiles();
+  return hideDisabled ? list.filter((profile) => profile.enabled) : list;
 }
 
 function liveBookedDate(label, stored) {
@@ -460,9 +468,10 @@ function enableSwitch(profile) {
 }
 
 function renderProfiles() {
+  const visible = visibleProfiles();
   const tbody = $("#profile-rows");
   tbody.replaceChildren(
-    ...sortedProfiles().map((profile) => {
+    ...visible.map((profile) => {
       const busy = profile.state !== "idle";
       const nextLabel = nextRunLabel(profile.nextRunAt);
 
@@ -525,7 +534,16 @@ function renderProfiles() {
     }),
   );
   $("#empty-state").hidden = profiles.length > 0;
+  $("#empty-enabled").hidden = profiles.length === 0 || visible.length > 0;
 }
+
+const hideDisabledSwitch = $("#hide-disabled");
+hideDisabledSwitch.checked = hideDisabled;
+hideDisabledSwitch.addEventListener("sl-change", () => {
+  hideDisabled = hideDisabledSwitch.checked;
+  localStorage.setItem(HIDE_DISABLED_KEY, hideDisabled ? "1" : "0");
+  renderProfiles();
+});
 
 async function toggleEnabled(profile, enabled) {
   try {
