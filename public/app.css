@@ -313,7 +313,24 @@ table {
 
 table.profiles {
   background: var(--card);
-  min-width: 70rem;
+  min-width: 78rem;
+}
+
+.reschedule-limit.ok {
+  color: var(--ok);
+}
+
+.reschedule-limit.warn,
+.reschedule-limit.bad {
+  font-weight: 650;
+}
+
+.reschedule-limit.warn {
+  color: var(--warn);
+}
+
+.reschedule-limit.bad {
+  color: var(--bad);
 }
 
 th,
@@ -336,11 +353,12 @@ tr.disabled {
   background: var(--disabled-row-bg);
 }
 
-tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip, .notify-tip)) {
+tr.disabled td:not(:first-child):not(:last-child):not(:has(.date-live-tip, .notify-tip, .reschedule-tip)) {
   opacity: var(--disabled-row-opacity);
 }
 
-tr.disabled .date-window-text {
+tr.disabled .date-window-text,
+tr.disabled .reschedule-limit {
   opacity: var(--disabled-row-opacity);
 }
 

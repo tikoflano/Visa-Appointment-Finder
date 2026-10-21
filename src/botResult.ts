@@ -4,6 +4,11 @@ export const VISA_RESULT_PREFIX = "VISA_RESULT ";
 
 export type BotOutcome = "none" | "available" | "error";
 
+export interface RescheduleLimit {
+  maximum: number;
+  remaining: number;
+}
+
 export interface BotResult {
   ok: boolean;
   outcome: BotOutcome;
@@ -12,6 +17,7 @@ export interface BotResult {
   error: string | null;
   notified: boolean;
   rescheduled: boolean;
+  rescheduleLimit: RescheduleLimit | null;
 }
 
 export function emptyBotResult(): BotResult {
@@ -23,7 +29,38 @@ export function emptyBotResult(): BotResult {
     error: null,
     notified: false,
     rescheduled: false,
+    rescheduleLimit: null,
   };
+}
+
+function integerInRange(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value)) return null;
+  if (value < min || value > max) return null;
+  return value;
+}
+
+export function normalizeRescheduleLimit(raw: unknown): RescheduleLimit | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<RescheduleLimit>;
+  const maximum = integerInRange(value.maximum, 1, 99);
+  const remaining = integerInRange(value.remaining, 0, 99);
+  if (maximum === null || remaining === null || remaining > maximum) return null;
+  return { maximum, remaining };
+}
+
+// AIS shows this on the Scheduling Limit Warning page, before the
+// "I understand" checkbox: "maximum number of 3 cancellations/reschedules"
+// and "You have 3 remaining attempt(s)".
+export function parseRescheduleLimit(text: string): RescheduleLimit | null {
+  const maximum = text.match(
+    /maximum number of\s+(\d+)\s+cancellations\s*\/\s*reschedules/i,
+  );
+  const remaining = text.match(/(\d+)\s+remaining\s+attempt/i);
+  if (!maximum || !remaining) return null;
+  return normalizeRescheduleLimit({
+    maximum: Number(maximum[1]),
+    remaining: Number(remaining[1]),
+  });
 }
 
 export function formatVisaResult(result: BotResult): string {
@@ -73,6 +110,7 @@ export function normalizeBotResult(raw: unknown): BotResult {
         : null,
     notified: !!value.notified,
     rescheduled: !!value.rescheduled,
+    rescheduleLimit: normalizeRescheduleLimit(value.rescheduleLimit),
   };
 }
 

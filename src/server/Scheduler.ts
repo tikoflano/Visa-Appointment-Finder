@@ -244,6 +244,12 @@ export class Scheduler {
             result.currentAppointment,
           );
         }
+        if (result?.rescheduleLimit) {
+          await this.store.setRescheduleLimit(
+            profileId,
+            result.rescheduleLimit,
+          );
+        }
         this.notifier.queueFailureAlarm(profileId, status, result);
       } catch (error) {
         console.error(`Failed to record run ${runId}:`, error);

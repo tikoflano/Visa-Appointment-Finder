@@ -127,6 +127,31 @@ function liveBookedDate(label, stored) {
   return tipNode;
 }
 
+function rescheduleLimitLabel(remaining, maximum) {
+  if (!Number.isInteger(remaining) || !Number.isInteger(maximum)) return "";
+  return `${remaining}/${maximum} available`;
+}
+
+function rescheduleLimitCell(profile) {
+  const remaining = profile.rescheduleRemaining;
+  const maximum = profile.rescheduleMaximum;
+  const label = rescheduleLimitLabel(remaining, maximum);
+  if (!label) return el("span", { class: "hint" }, "—");
+  const tone = remaining <= 0 ? "bad" : remaining === 1 ? "warn" : "ok";
+  const tip =
+    remaining <= 0
+      ? `No reschedules left. AIS allows ${maximum}, and reaching that limit locks the appointment.`
+      : `${remaining} of ${maximum} reschedules remaining before AIS locks the appointment.`;
+  const node = el(
+    "sl-tooltip",
+    { class: "reschedule-tip", placement: "top", hoist: true },
+    el("span", { slot: "content" }, tip),
+    el("span", { class: `reschedule-limit ${tone}`, tabindex: "0" }, label),
+  );
+  node.setAttribute("hoist", "");
+  return node;
+}
+
 function dateWindow(profile) {
   const stored = !!profile.currentAppointmentDate;
   const booked = stored ? formatDate(profile.currentAppointmentDate) : "booked";
@@ -457,6 +482,7 @@ function renderProfiles() {
                 profile.hasSuccessfulRun ? "none" : "unknown",
               ),
         ),
+        el("td", { class: "nowrap" }, rescheduleLimitCell(profile)),
         el("td", { class: "nowrap" }, dateWindow(profile)),
         el(
           "td",
@@ -1037,6 +1063,11 @@ function resultDetail(run) {
     if (result.dates?.length) {
       rows.push(["Dates", result.dates.map((iso) => formatDate(iso) || iso).join(", ")]);
     }
+    const limitLabel = rescheduleLimitLabel(
+      result.rescheduleLimit?.remaining,
+      result.rescheduleLimit?.maximum,
+    );
+    if (limitLabel) rows.push(["Reschedules", limitLabel]);
     rows.push(["Notified", result.notified ? "yes" : "no"]);
     rows.push(["Rescheduled", result.rescheduled ? "yes" : "no"]);
   }

@@ -1,8 +1,10 @@
 import { Page } from "playwright";
+import { parseRescheduleLimit, type RescheduleLimit } from "../botResult";
 import { formatDate, parseDateAsUtc } from "../utils/dateUtils";
 
 export class AppointmentService {
   private page: Page;
+  rescheduleLimit: RescheduleLimit | null = null;
 
   constructor(page: Page) {
     this.page = page;
@@ -61,9 +63,20 @@ export class AppointmentService {
   async handleCheckboxSteps(): Promise<void> {
     let method = await this.getFormMethod();
 
-    // Continue while the form uses GET (checkbox confirmation steps)
+    // Continue while the form uses GET (checkbox confirmation steps).
+    // One of these is the Scheduling Limit Warning: check "I understand",
+    // then Continue. The warning text states the cancellation/reschedule cap.
     while (method.toLowerCase() === "get") {
       console.log("Checkbox step detected");
+      const pageText = await this.page.locator("body").innerText();
+      const limit = parseRescheduleLimit(pageText);
+      if (limit) {
+        this.rescheduleLimit = limit;
+        console.log(
+          `Reschedule limit: ${limit.remaining} of ${limit.maximum} remaining`,
+        );
+      }
+
       const checkboxes = this.page.locator("input[type=checkbox]");
       const checkboxesCount = await checkboxes.count();
 

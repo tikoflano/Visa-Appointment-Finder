@@ -13,6 +13,7 @@ import { addDays, formatDate } from "./utils/dateUtils";
 (async () => {
   const browserService = new BrowserService();
   const result: BotResult = emptyBotResult();
+  let appointmentService: AppointmentService | undefined;
 
   try {
     const config = parseCliArgs();
@@ -32,7 +33,7 @@ import { addDays, formatDate } from "./utils/dateUtils";
     }
 
     const authenticator = new VisaAuthenticator(page);
-    const appointmentService = new AppointmentService(page);
+    appointmentService = new AppointmentService(page);
 
     await authenticator.login(user_email, user_password);
 
@@ -95,6 +96,9 @@ import { addDays, formatDate } from "./utils/dateUtils";
         : "Unknown error";
     process.exitCode = 1;
   } finally {
+    if (appointmentService?.rescheduleLimit) {
+      result.rescheduleLimit = appointmentService.rescheduleLimit;
+    }
     process.stdout.write(formatVisaResult(result));
     await browserService.close();
   }

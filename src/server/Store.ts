@@ -7,6 +7,7 @@ import {
   normalizeBotResult,
   profileSearchWindow,
   windowsOverlap,
+  type RescheduleLimit,
 } from "../botResult";
 import { Action } from "../types";
 import { SecretBox } from "./SecretBox";
@@ -39,6 +40,8 @@ export interface Profile extends Omit<ProfileInput, "visaPassword"> {
   id: number;
   hasPassword: boolean;
   currentAppointmentDate: string | null;
+  rescheduleRemaining: number | null;
+  rescheduleMaximum: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -128,6 +131,12 @@ export function isFailureRun(run: Pick<Run, "status" | "result">): boolean {
   return run.status === "failed" || run.status === "timeout" || run.status === "interrupted";
 }
 
+function integerOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
+  return null;
+}
+
 function normalizeEmailList(value: unknown): string {
   return String(value ?? "")
     .split(",")
@@ -201,6 +210,8 @@ export class Store {
         actions TEXT NOT NULL DEFAULT '',
         enabled INTEGER NOT NULL DEFAULT 0,
         current_appointment_date TEXT,
+        reschedule_remaining INTEGER,
+        reschedule_maximum INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -282,6 +293,20 @@ export class Store {
     ) {
       await this.db.exec(
         "ALTER TABLE profile ADD COLUMN current_appointment_date TEXT",
+      );
+    }
+    if (
+      !profileColumns.some((column) => column.name === "reschedule_remaining")
+    ) {
+      await this.db.exec(
+        "ALTER TABLE profile ADD COLUMN reschedule_remaining INTEGER",
+      );
+    }
+    if (
+      !profileColumns.some((column) => column.name === "reschedule_maximum")
+    ) {
+      await this.db.exec(
+        "ALTER TABLE profile ADD COLUMN reschedule_maximum INTEGER",
       );
     }
     if (
@@ -504,6 +529,8 @@ export class Store {
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
       enabled: !!row.enabled,
       currentAppointmentDate: row.current_appointment_date ?? null,
+      rescheduleRemaining: integerOrNull(row.reschedule_remaining),
+      rescheduleMaximum: integerOrNull(row.reschedule_maximum),
       hasPassword: !!row.visa_password_enc,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -745,6 +772,15 @@ export class Store {
     await this.db.run(
       "UPDATE profile SET current_appointment_date = ?, updated_at = ? WHERE id = ?",
       [date, new Date().toISOString(), id],
+    );
+  }
+
+  async setRescheduleLimit(id: number, limit: RescheduleLimit): Promise<void> {
+    await this.db.run(
+      `UPDATE profile
+       SET reschedule_remaining = ?, reschedule_maximum = ?, updated_at = ?
+       WHERE id = ?`,
+      [limit.remaining, limit.maximum, new Date().toISOString(), id],
     );
   }
 
