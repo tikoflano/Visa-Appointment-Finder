@@ -8,7 +8,8 @@
     "watch": "tsc --watch",
     "start": "node build/server/index.js",
     "dev": "./run.sh dev",
-    "cli": "node build/server/cli.js"
+    "cli": "node build/server/cli.js",
+    "test:openwa": "tsc && node scripts/openwa-notifier-test.cjs"
   },
   "keywords": [],
   "author": "",

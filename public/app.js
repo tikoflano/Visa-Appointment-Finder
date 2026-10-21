@@ -11,6 +11,9 @@ import "@shoelace-style/shoelace/dist/components/input/input.js";
 import "@shoelace-style/shoelace/dist/components/option/option.js";
 import "@shoelace-style/shoelace/dist/components/select/select.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
+import "@shoelace-style/shoelace/dist/components/tab/tab.js";
+import "@shoelace-style/shoelace/dist/components/tab-group/tab-group.js";
+import "@shoelace-style/shoelace/dist/components/tab-panel/tab-panel.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
 import "./app.css";
 
@@ -143,10 +146,16 @@ function dateWindow(profile) {
 }
 
 function notifyAddresses(profile) {
-  return String(profile.emailDestination || "")
+  const emails = String(profile.emailDestination || "")
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
+  const phones = String(profile.whatsappDestination || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((id) => `WhatsApp ${id}`);
+  return [...emails, ...phones];
 }
 
 function actionBadge(action, profile) {
@@ -319,6 +328,25 @@ async function refresh() {
     profiles = profileList;
     checkIntervalMinutes = Number(settings.intervalMinutes) || 5;
     setBanner("#settings-warning", !(settings.gmailUser && settings.hasGmailAppPassword));
+    const openwaReady = !!(
+      settings.openwaBaseUrl &&
+      settings.openwaSessionId &&
+      settings.hasOpenwaApiKey
+    );
+    const wantsWhatsapp = profileList.some(
+      (profile) =>
+        profile.actions?.includes("notify") && profile.whatsappDestination,
+    );
+    const partialOpenwa = !!(
+      settings.openwaBaseUrl ||
+      settings.openwaSessionId ||
+      settings.hasOpenwaApiKey ||
+      settings.whatsappAdminDestination
+    );
+    setBanner(
+      "#openwa-warning",
+      (wantsWhatsapp || partialOpenwa) && !openwaReady,
+    );
     setQueueWarning();
     renderProfiles();
   } catch (error) {
@@ -530,7 +558,15 @@ function openProfile(profile) {
     actions: ["notify"],
     enabled: false,
   };
-  for (const field of ["name", "visaProcessId", "visaEmail", "emailDestination", "minDate", "maxDate"]) {
+  for (const field of [
+    "name",
+    "visaProcessId",
+    "visaEmail",
+    "emailDestination",
+    "whatsappDestination",
+    "minDate",
+    "maxDate",
+  ]) {
     named(profileForm, field).value = values[field] ?? "";
   }
   for (const checkbox of actionCheckboxes(profileForm)) {
@@ -572,6 +608,7 @@ profileForm.addEventListener("submit", async (event) => {
     visaEmail: named(form, "visaEmail").value,
     visaPassword: named(form, "visaPassword").value || undefined,
     emailDestination: named(form, "emailDestination").value,
+    whatsappDestination: named(form, "whatsappDestination").value,
     minDate: named(form, "minDate").value || null,
     maxDate: named(form, "maxDate").value || null,
     actions,
@@ -603,6 +640,9 @@ $("#open-settings").addEventListener("click", async () => {
   for (const field of [
     "gmailUser",
     "emailAdminDestination",
+    "openwaBaseUrl",
+    "openwaSessionId",
+    "whatsappAdminDestination",
     "intervalMinutes",
     "heartbeatMinutes",
     "maxConcurrentRuns",
@@ -614,9 +654,13 @@ $("#open-settings").addEventListener("click", async () => {
   named(settingsForm, "gmailAppPassword").placeholder = settings.hasGmailAppPassword
     ? "Leave empty to keep the stored password"
     : "Not set";
+  named(settingsForm, "openwaApiKey").placeholder = settings.hasOpenwaApiKey
+    ? "Leave empty to keep the stored key"
+    : "Not set";
   named(settingsForm, "heartbeatEnabled").checked = !!settings.heartbeatEnabled;
   named(settingsForm, "botDebug").checked = !!settings.botDebug;
   $("#last-heartbeat").textContent = lastHeartbeatLabel(settings.lastHeartbeatAt);
+  $("sl-tab-group", settingsForm)?.show("notifications");
   settingsDialog.show();
 });
 
@@ -624,6 +668,44 @@ function lastHeartbeatLabel(iso) {
   if (!iso) return "Last sent: never";
   return `Last sent: ${formatTimestamp(iso)} (${relativeTime(iso)})`;
 }
+
+function settingsTestPayload(channel) {
+  const form = settingsForm;
+  return {
+    channel,
+    gmailUser: named(form, "gmailUser").value,
+    gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
+    emailAdminDestination: named(form, "emailAdminDestination").value,
+    openwaBaseUrl: named(form, "openwaBaseUrl").value,
+    openwaSessionId: named(form, "openwaSessionId").value,
+    openwaApiKey: named(form, "openwaApiKey").value || undefined,
+    whatsappAdminDestination: named(form, "whatsappAdminDestination").value,
+  };
+}
+
+async function sendNotificationTest(channel, button) {
+  setError(settingsForm);
+  button.loading = true;
+  try {
+    await api("POST", "/api/settings/test-notification", settingsTestPayload(channel));
+    toast(
+      channel === "whatsapp" ? "WhatsApp test sent" : "Email test sent",
+      "success",
+    );
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+}
+
+$("#test-email").addEventListener("click", () => {
+  sendNotificationTest("email", $("#test-email"));
+});
+
+$("#test-whatsapp").addEventListener("click", () => {
+  sendNotificationTest("whatsapp", $("#test-whatsapp"));
+});
 
 $("#send-heartbeat").addEventListener("click", async () => {
   const button = $("#send-heartbeat");
@@ -649,6 +731,10 @@ settingsForm.addEventListener("submit", async (event) => {
       gmailUser: named(form, "gmailUser").value,
       gmailAppPassword: named(form, "gmailAppPassword").value || undefined,
       emailAdminDestination: named(form, "emailAdminDestination").value,
+      openwaBaseUrl: named(form, "openwaBaseUrl").value,
+      openwaSessionId: named(form, "openwaSessionId").value,
+      openwaApiKey: named(form, "openwaApiKey").value || undefined,
+      whatsappAdminDestination: named(form, "whatsappAdminDestination").value,
       intervalMinutes: Number(named(form, "intervalMinutes").value),
       heartbeatEnabled: named(form, "heartbeatEnabled").checked,
       heartbeatMinutes: Number(named(form, "heartbeatMinutes").value),
@@ -1051,6 +1137,7 @@ const notesFrom = $("#notes-from");
 const notesTo = $("#notes-to");
 const notesKind = $("#notes-kind");
 const notesStatus = $("#notes-status");
+const notesChannel = $("#notes-channel");
 const notesClearFilter = $("#notes-clear-filter");
 let notesCache = [];
 let notesLoadGen = 0;
@@ -1059,6 +1146,7 @@ let expandedNoteId = null;
 function notificationKindBadge(kind) {
   if (kind === "heartbeat") return badge("heartbeat", "info");
   if (kind === "failure") return badge("failure", "bad");
+  if (kind === "test") return badge("test", "muted");
   return badge("appointment", "warn");
 }
 
@@ -1067,7 +1155,8 @@ function notesFilterActive() {
     notesFrom.value ||
       notesTo.value ||
       notesKind.value !== "any" ||
-      notesStatus.value !== "any",
+      notesStatus.value !== "any" ||
+      notesChannel.value !== "any",
   );
 }
 
@@ -1096,7 +1185,7 @@ function renderNotificationRows(emptyMessage) {
         {},
         el(
           "td",
-          { class: "sub", colspan: "4" },
+          { class: "sub", colspan: "5" },
           emptyMessage || (notesFilterActive() ? "No notifications in this range" : "No notifications yet"),
         ),
       ),
@@ -1112,6 +1201,7 @@ function renderNotificationRows(emptyMessage) {
         { class: expanded ? "clickable expanded" : "clickable", onclick: () => toggleNotification(note) },
         el("td", { class: "mono nowrap" }, formatTimestamp(note.sentAt)),
         el("td", {}, notificationKindBadge(note.kind)),
+        el("td", {}, badge(note.channel || "email", note.channel === "whatsapp" ? "ok" : "info")),
         el("td", {}, note.profileName || el("span", { class: "hint" }, "—")),
         el("td", {}, badge(note.status, note.status === "sent" ? "ok" : "bad")),
       ),
@@ -1121,7 +1211,7 @@ function renderNotificationRows(emptyMessage) {
         el(
           "tr",
           { class: "run-detail" },
-          el("td", { colspan: "4" }, notificationDetail(note)),
+          el("td", { colspan: "5" }, notificationDetail(note)),
         ),
       );
     }
@@ -1144,6 +1234,7 @@ async function loadNotifications() {
   if (to) params.set("to", to);
   if (notesKind.value !== "any") params.set("kind", notesKind.value);
   if (notesStatus.value !== "any") params.set("status", notesStatus.value);
+  if (notesChannel.value !== "any") params.set("channel", notesChannel.value);
   const gen = ++notesLoadGen;
   try {
     const data = await api("GET", `/api/notifications?${params}`);
@@ -1164,6 +1255,7 @@ function resetNotesFilters({ keepRange = false } = {}) {
   }
   notesKind.value = "any";
   notesStatus.value = "any";
+  notesChannel.value = "any";
   updateNotesClearButton();
 }
 
@@ -1383,6 +1475,10 @@ notesKind.addEventListener("sl-change", () => {
   loadNotifications();
 });
 notesStatus.addEventListener("sl-change", () => {
+  updateNotesClearButton();
+  loadNotifications();
+});
+notesChannel.addEventListener("sl-change", () => {
   updateNotesClearButton();
   loadNotifications();
 });

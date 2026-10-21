@@ -1,0 +1,49 @@
+# Sidecar WhatsApp gateway. Not the visa-ui app.
+# visa-ui (started by ./run.sh) joins the same `visa` network and calls http://openwa:2785
+#
+# Do not set this network to internal: OpenWA must reach WhatsApp on the internet.
+# The dashboard is published on localhost only.
+
+name: visa
+
+services:
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:latest
+    container_name: openwa
+    hostname: openwa
+    restart: unless-stopped
+    stop_grace_period: 75s
+    shm_size: 1g
+    mem_limit: 2g
+    pids_limit: 2048
+    ports:
+      - "127.0.0.1:2785:2785"
+    expose:
+      - "2785"
+    volumes:
+      - openwa-data:/app/data
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-UTC}
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp/.config
+      XDG_CACHE_HOME: /tmp/.cache
+      PORT: "2785"
+      ENGINE_TYPE: whatsapp-web.js
+      AUTO_START_SESSIONS: "true"
+      SEND_PACING_ENABLED: "true"
+      ENABLE_SWAGGER: "false"
+      MCP_ENABLED: "false"
+    networks:
+      visa:
+        aliases:
+          - openwa
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  visa:
+    name: visa
+
+volumes:
+  openwa-data:

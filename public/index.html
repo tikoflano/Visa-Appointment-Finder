@@ -104,7 +104,10 @@
         Dev mode: login is skipped and the scheduler and notifier are off. The Docker container on port 3000 is unchanged.
       </sl-alert>
       <sl-alert id="settings-warning" variant="warning" hidden>
-        Gmail credentials are not configured, so notifications and heartbeats can't be sent. Open Settings to add them.
+        Gmail credentials are not configured, so email notifications and heartbeats can't be sent. Open Settings to add them, or use WhatsApp via OpenWA.
+      </sl-alert>
+      <sl-alert id="openwa-warning" variant="warning" hidden>
+        OpenWA is not fully configured (URL, session id, and API key), so WhatsApp notifications can't be sent. Open Settings to finish it.
       </sl-alert>
       <sl-alert id="queue-warning" variant="warning" hidden>
         <span id="queue-warning-text"></span>
@@ -145,8 +148,17 @@
             <span slot="label" class="label-text">
               Notify emails (comma separated)
               <sl-tooltip placement="bottom">
-                <span slot="content">Recipients for appointment found emails. Required when Send email notification is on. Admin addresses still get a BCC and do not appear to these recipients.</span>
+                <span slot="content">Recipients for appointment-found emails. Required when Notify is on unless WhatsApp numbers are set. Admin addresses still get a BCC and do not appear to these recipients.</span>
                 <sl-icon-button class="help-tip" name="question-circle" label="About notify emails"></sl-icon-button>
+              </sl-tooltip>
+            </span>
+          </sl-input>
+          <sl-input class="wide" name="whatsappDestination">
+            <span slot="label" class="label-text">
+              WhatsApp numbers (comma separated)
+              <sl-tooltip placement="bottom">
+                <span slot="content">E.164 phones (with country code) or group ids like 120…@g.us. Used when Notify is on. Independent of email. Needs OpenWA in Settings.</span>
+                <sl-icon-button class="help-tip" name="question-circle" label="About WhatsApp numbers"></sl-icon-button>
               </sl-tooltip>
             </span>
           </sl-input>
@@ -171,7 +183,7 @@
         </div>
         <fieldset>
           <legend>When an appointment is found</legend>
-          <sl-checkbox name="action" value="notify">Send email notification</sl-checkbox>
+          <sl-checkbox name="action" value="notify">Notify when a date is found</sl-checkbox>
           <div class="check-row">
             <sl-checkbox name="action" value="reschedule">Reschedule automatically</sl-checkbox>
             <sl-tooltip placement="bottom">
@@ -189,100 +201,162 @@
       </div>
     </sl-dialog>
 
-    <sl-dialog id="settings-dialog" label="Settings">
+    <sl-dialog id="settings-dialog" class="settings-dialog" label="Settings">
       <form id="settings-form">
-        <div class="grid">
-          <sl-input name="gmailUser" type="email" autocomplete="off">
-            <span slot="label" class="label-text">
-              Gmail user
-              <sl-tooltip placement="bottom">
-                <span slot="content">Gmail account that sends appointment emails and heartbeats.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About Gmail user"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <sl-input name="gmailAppPassword" type="password" autocomplete="new-password">
-            <span slot="label" class="label-text">
-              Gmail app password
-              <sl-tooltip placement="bottom">
-                <span slot="content">Google app password for that Gmail account, not the normal login password. Leave blank to keep the stored one.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About Gmail app password"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <sl-input class="wide" name="emailAdminDestination">
-            <span slot="label" class="label-text">
-              Admin notification emails (comma separated)
-              <sl-tooltip placement="bottom">
-                <span slot="content">Receives heartbeat emails, consecutive-failure alarms, and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About admin notification emails"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <div class="check-row wide">
-            <sl-checkbox name="heartbeatEnabled">Send heartbeat emails</sl-checkbox>
-            <sl-tooltip placement="bottom">
-              <span slot="content">Emails the admin addresses at most once per heartbeat interval, even if no profile ran. The email lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
-              <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat emails"></sl-icon-button>
-            </sl-tooltip>
-          </div>
-          <sl-input name="intervalMinutes" type="number" min="1" required>
-            <span slot="label" class="label-text">
-              Check every (minutes)
-              <sl-tooltip placement="bottom">
-                <span slot="content">How often every enabled profile is checked. One interval for the whole app, not per profile.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About check interval"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <sl-input name="heartbeatMinutes" type="number" min="1" required>
-            <span slot="label" class="label-text">
-              Heartbeat every (minutes)
-              <sl-tooltip placement="bottom">
-                <span slot="content">Minimum minutes between heartbeat emails. Default 1440 (once a day).</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <div class="check-row wide heartbeat-status">
-            <span id="last-heartbeat" class="hint">Last sent: never</span>
-            <sl-button id="send-heartbeat" type="button" size="small">Send now</sl-button>
-          </div>
-          <sl-input name="maxConcurrentRuns" type="number" min="1" required>
-            <span slot="label" class="label-text">
-              Max concurrent runs
-              <sl-tooltip placement="bottom">
-                <span slot="content">How many visa checks can run at the same time. Extra due profiles wait in a queue.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About max concurrent runs"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <sl-input name="runTimeoutMinutes" type="number" min="1" required>
-            <span slot="label" class="label-text">
-              Run timeout (minutes)
-              <sl-tooltip placement="bottom">
-                <span slot="content">A check that runs longer than this is killed so a stuck browser cannot block the queue.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About run timeout"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <sl-input name="failureAlarmThreshold" type="number" min="1" required>
-            <span slot="label" class="label-text">
-              Failure alarm after (errors)
-              <sl-tooltip placement="bottom">
-                <span slot="content">Email the admin addresses when one profile fails this many checks in a row. A later successful check resets the count. Default 3.</span>
-                <sl-icon-button class="help-tip" name="question-circle" label="About failure alarm"></sl-icon-button>
-              </sl-tooltip>
-            </span>
-          </sl-input>
-          <div class="check-row wide">
-            <sl-checkbox name="botDebug">Capture bot debug output</sl-checkbox>
-            <sl-tooltip placement="bottom">
-              <span slot="content">When on, the next checks keep step-by-step bot messages on the run. Leave off unless you are investigating a failure.</span>
-              <sl-icon-button class="help-tip" name="question-circle" label="About bot debug output"></sl-icon-button>
-            </sl-tooltip>
-          </div>
-        </div>
+        <sl-tab-group class="settings-tabs">
+          <sl-tab slot="nav" panel="notifications">Notifications</sl-tab>
+          <sl-tab slot="nav" panel="scheduler">Scheduler</sl-tab>
+          <sl-tab-panel name="notifications">
+            <fieldset>
+              <legend>Email</legend>
+              <div class="grid">
+                <sl-input name="gmailUser" type="email" autocomplete="off">
+                  <span slot="label" class="label-text">
+                    Gmail user
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Gmail account that sends appointment emails and heartbeats.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About Gmail user"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <sl-input name="gmailAppPassword" type="password" autocomplete="new-password">
+                  <span slot="label" class="label-text">
+                    Gmail app password
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Google app password for that Gmail account, not the normal login password. Leave blank to keep the stored one.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About Gmail app password"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <sl-input class="wide" name="emailAdminDestination">
+                  <span slot="label" class="label-text">
+                    Admin notification emails (comma separated)
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Receives heartbeat emails, consecutive-failure alarms, and a BCC of every appointment notification. People on a profile's notify list do not see these addresses.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About admin notification emails"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <span class="hint">Sends a test to the admin emails above. Save is not required.</span>
+                  <sl-button id="test-email" type="button" size="small">Test email</sl-button>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>WhatsApp</legend>
+              <div class="grid">
+                <sl-input class="wide" name="openwaBaseUrl" placeholder="http://openwa:2785">
+                  <span slot="label" class="label-text">
+                    OpenWA URL
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">From visa-ui in Docker use http://openwa:2785. From ./run.sh dev on the host use http://127.0.0.1:2785. Leave empty to disable WhatsApp. Use a dedicated number you can afford to lose — OpenWA is unofficial.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA URL"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <sl-input name="openwaSessionId">
+                  <span slot="label" class="label-text">
+                    OpenWA session id
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Session id from the OpenWA dashboard after you scan the QR code.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA session id"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <sl-input name="openwaApiKey" type="password" autocomplete="new-password">
+                  <span slot="label" class="label-text">
+                    OpenWA API key
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Operator API key from OpenWA. Stored encrypted. Leave blank to keep the stored one.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About OpenWA API key"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <sl-input class="wide" name="whatsappAdminDestination">
+                  <span slot="label" class="label-text">
+                    Admin WhatsApp numbers (comma separated)
+                    <sl-tooltip placement="bottom">
+                      <span slot="content">Receives heartbeats, failure alarms, and a copy of appointment alerts. E.164 phones or a group id. Independent of admin emails.</span>
+                      <sl-icon-button class="help-tip" name="question-circle" label="About admin WhatsApp numbers"></sl-icon-button>
+                    </sl-tooltip>
+                  </span>
+                </sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <span class="hint">Sends a test to the admin WhatsApp numbers above. Save is not required.</span>
+                  <sl-button id="test-whatsapp" type="button" size="small">Test WhatsApp</sl-button>
+                </div>
+              </div>
+            </fieldset>
+          </sl-tab-panel>
+          <sl-tab-panel name="scheduler">
+            <div class="grid">
+              <sl-input name="intervalMinutes" type="number" min="1" required>
+                <span slot="label" class="label-text">
+                  Check every (minutes)
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">How often every enabled profile is checked. One interval for the whole app, not per profile.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About check interval"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
+              <sl-input name="heartbeatMinutes" type="number" min="1" required>
+                <span slot="label" class="label-text">
+                  Heartbeat every (minutes)
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">Minimum minutes between heartbeat notifications. Default 1440 (once a day).</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat interval"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
+              <div class="check-row wide">
+                <sl-checkbox name="heartbeatEnabled">Send heartbeat notifications</sl-checkbox>
+                <sl-tooltip placement="bottom">
+                  <span slot="content">Sends to admin emails and WhatsApp numbers at most once per heartbeat interval, even if no profile ran. Lists enabled profiles and whether at least one of the last 5 runs succeeded.</span>
+                  <sl-icon-button class="help-tip" name="question-circle" label="About heartbeat notifications"></sl-icon-button>
+                </sl-tooltip>
+              </div>
+              <div class="check-row wide heartbeat-status">
+                <span id="last-heartbeat" class="hint">Last sent: never</span>
+                <sl-button id="send-heartbeat" type="button" size="small">Send now</sl-button>
+              </div>
+              <sl-input name="maxConcurrentRuns" type="number" min="1" required>
+                <span slot="label" class="label-text">
+                  Max concurrent runs
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">How many visa checks can run at the same time. Extra due profiles wait in a queue.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About max concurrent runs"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
+              <sl-input name="runTimeoutMinutes" type="number" min="1" required>
+                <span slot="label" class="label-text">
+                  Run timeout (minutes)
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">A check that runs longer than this is killed so a stuck browser cannot block the queue.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About run timeout"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
+              <sl-input name="failureAlarmThreshold" type="number" min="1" required>
+                <span slot="label" class="label-text">
+                  Failure alarm after (errors)
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">Notify the admin addresses and WhatsApp numbers when one profile fails this many checks in a row. A later successful check resets the count. Default 3.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About failure alarm"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
+              <div class="check-row wide">
+                <sl-checkbox name="botDebug">Capture bot debug output</sl-checkbox>
+                <sl-tooltip placement="bottom">
+                  <span slot="content">When on, the next checks keep step-by-step bot messages on the run. Leave off unless you are investigating a failure.</span>
+                  <sl-icon-button class="help-tip" name="question-circle" label="About bot debug output"></sl-icon-button>
+                </sl-tooltip>
+              </div>
+            </div>
+          </sl-tab-panel>
+        </sl-tab-group>
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
       <div slot="footer" class="dialog-actions">
@@ -359,11 +433,17 @@
           <sl-option value="appointment">Appointment</sl-option>
           <sl-option value="heartbeat">Heartbeat</sl-option>
           <sl-option value="failure">Failure alarm</sl-option>
+          <sl-option value="test">Test</sl-option>
         </sl-select>
         <sl-select id="notes-status" label="Status" size="small" value="any" hoist>
           <sl-option value="any">Any</sl-option>
           <sl-option value="sent">Sent</sl-option>
           <sl-option value="failed">Failed</sl-option>
+        </sl-select>
+        <sl-select id="notes-channel" label="Channel" size="small" value="any" hoist>
+          <sl-option value="any">Any</sl-option>
+          <sl-option value="email">Email</sl-option>
+          <sl-option value="whatsapp">WhatsApp</sl-option>
         </sl-select>
         <sl-button id="notes-clear-filter" size="small" disabled>Clear</sl-button>
       </div>
@@ -373,6 +453,7 @@
             <tr>
               <th>When</th>
               <th>Kind</th>
+              <th>Channel</th>
               <th>Profile</th>
               <th>Status</th>
             </tr>

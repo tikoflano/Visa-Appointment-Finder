@@ -64,6 +64,7 @@ async function dump(store: Store) {
     settings: {
       ...settings,
       gmailAppPassword: await store.getGmailAppPassword(),
+      openwaApiKey: await store.getOpenwaApiKey(),
     },
     profiles: await Promise.all(
       profiles.map(async (profile) => ({

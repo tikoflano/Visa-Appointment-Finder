@@ -129,10 +129,15 @@ function parseNotifiedQuery(value: string | null): boolean | undefined {
 
 function parseNotificationKind(
   value: string | null,
-): "appointment" | "heartbeat" | "failure" | undefined {
+): "appointment" | "heartbeat" | "failure" | "test" | undefined {
   const raw = value?.trim().toLowerCase();
   if (!raw) return undefined;
-  if (raw === "appointment" || raw === "heartbeat" || raw === "failure") {
+  if (
+    raw === "appointment" ||
+    raw === "heartbeat" ||
+    raw === "failure" ||
+    raw === "test"
+  ) {
     return raw;
   }
   throw new HttpError(400, "Invalid kind");
@@ -145,6 +150,15 @@ function parseNotificationStatus(
   if (!raw) return undefined;
   if (raw === "sent" || raw === "failed") return raw;
   throw new HttpError(400, "Invalid status");
+}
+
+function parseNotificationChannel(
+  value: string | null,
+): string | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === "email" || raw === "whatsapp") return raw;
+  throw new HttpError(400, "Invalid channel");
 }
 
 function parseOrderQuery(value: string | null): "asc" | "desc" {
@@ -441,6 +455,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       handler: async () => notifier.sendHeartbeat({ force: true }),
     },
     {
+      method: "POST",
+      pattern: /^\/api\/settings\/test-notification$/,
+      handler: async ({ body }) => {
+        const channel = String(body.channel ?? "").trim();
+        if (channel !== "email" && channel !== "whatsapp") {
+          throw new HttpError(400, "channel must be email or whatsapp");
+        }
+        return notifier.sendTest({
+          channel,
+          gmailUser: body.gmailUser,
+          gmailAppPassword: body.gmailAppPassword,
+          emailAdminDestination: body.emailAdminDestination,
+          openwaBaseUrl: body.openwaBaseUrl,
+          openwaSessionId: body.openwaSessionId,
+          openwaApiKey: body.openwaApiKey,
+          whatsappAdminDestination: body.whatsappAdminDestination,
+        });
+      },
+    },
+    {
       method: "GET",
       pattern: /^\/api\/notifications$/,
       handler: async ({ url }) => {
@@ -450,12 +484,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         if (from && to && from > to) throw new HttpError(400, "From must be before To");
         const kind = parseNotificationKind(url.searchParams.get("kind"));
         const status = parseNotificationStatus(url.searchParams.get("status"));
+        const channel = parseNotificationChannel(url.searchParams.get("channel"));
         return {
           notifications: await store.listNotifications(limit, {
             from,
             to,
             kind,
             status,
+            channel,
           }),
         };
       },

@@ -7,11 +7,15 @@ KEY_FILE="$SECRETS_DIR/master.key"
 DB_FILE="$BASE_DIR/db.sqlite"
 IMAGE=visa
 CONTAINER_NAME=visa-ui
+OPENWA_CONTAINER=openwa
+OPENWA_COMPOSE="$BASE_DIR/compose.openwa.yml"
+NETWORK=visa
 CONTAINER_HOST=/host
 PORT="${PORT:-3000}"
 HOST_BIND="${HOST_BIND:-127.0.0.1}"
 HASH_LABEL=visa.source_hash
 IMAGE_REBUILT=0
+OPENWA="${OPENWA:-1}"
 
 usage() {
   cat <<'EOF'
@@ -28,8 +32,10 @@ Commands:
   run                      Same as the default start
   dev                      Vite HMR UI + host API. No Docker, no login, no scheduler
   restart                  Recreate visa-ui even if it is already running
-  stop                     Stop and remove visa-ui
-  logs                     Follow container logs
+  stop                     Stop and remove visa-ui (OpenWA is left running)
+  stop-openwa              Stop the OpenWA sidecar
+  logs                     Follow visa-ui logs
+  logs-openwa              Follow OpenWA logs
   dump                     Print decrypted settings and profiles (host Node)
   set-password             Set the admin UI password (host Node)
   generate-key             Show/create secrets/master.key
@@ -103,11 +109,33 @@ container_running() {
   [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" = "true" ]
 }
 
+openwa_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$OPENWA_CONTAINER" 2>/dev/null || echo false)" = "true" ]
+}
+
+compose() {
+  docker compose -f "$OPENWA_COMPOSE" "$@"
+}
+
+ensure_openwa() {
+  if [ "$OPENWA" != "1" ]; then
+    return
+  fi
+  compose up -d
+}
+
 print_status() {
   echo "Management UI: http://127.0.0.1:$PORT"
   echo "Container $CONTAINER_NAME keeps running after this terminal closes."
   echo "Logs:  ./run.sh logs"
   echo "Stop:  ./run.sh stop"
+  if [ "$OPENWA" = "1" ]; then
+    echo "OpenWA dashboard (QR): http://127.0.0.1:2785"
+    echo "From visa-ui use Settings URL http://openwa:2785"
+    echo "API key: docker exec $OPENWA_CONTAINER cat /app/data/.api-key"
+    echo "OpenWA logs: ./run.sh logs-openwa"
+    echo "Stop OpenWA: ./run.sh stop-openwa"
+  fi
 }
 
 # Bind the project directory so SQLite WAL/SHM files sit next to db.sqlite
@@ -123,6 +151,9 @@ docker_base=(
   --shm-size=1g
   -p "$HOST_BIND:$PORT:3000"
 )
+if [ "$OPENWA" = "1" ]; then
+  docker_base+=(--network "$NETWORK")
+fi
 
 ensure_key
 touch "$DB_FILE"
@@ -151,11 +182,28 @@ if [ "${1:-}" = "stop" ]; then
     echo "$CONTAINER_NAME is not running"
   fi
   docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if openwa_running; then
+    echo "OpenWA is still running (WhatsApp session). Stop it with: ./run.sh stop-openwa"
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "stop-openwa" ]; then
+  if openwa_running || docker inspect "$OPENWA_CONTAINER" >/dev/null 2>&1; then
+    compose stop
+    echo "Stopped $OPENWA_CONTAINER"
+  else
+    echo "$OPENWA_CONTAINER is not running"
+  fi
   exit 0
 fi
 
 if [ "${1:-}" = "logs" ]; then
   exec docker logs -f "$CONTAINER_NAME"
+fi
+
+if [ "${1:-}" = "logs-openwa" ]; then
+  exec docker logs -f "$OPENWA_CONTAINER"
 fi
 
 if [ "${1:-}" = "dev" ]; then
@@ -225,6 +273,7 @@ while [ $# -gt 0 ]; do
 done
 
 ensure_image "$rebuild_flag"
+ensure_openwa
 
 if [ "$foreground" = 1 ]; then
   if container_running; then

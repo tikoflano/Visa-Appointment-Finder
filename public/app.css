@@ -419,6 +419,10 @@ sl-dialog::part(panel) {
   box-shadow: 0 28px 70px rgba(11, 23, 56, 0.32);
 }
 
+sl-dialog.settings-dialog::part(panel) {
+  width: min(680px, 92vw);
+}
+
 sl-dialog.wide-dialog::part(panel) {
   width: min(960px, 94vw);
 }
@@ -506,8 +510,13 @@ sl-dialog::part(footer) {
   grid-column: 1 / -1;
 }
 
-.heartbeat-status {
+.heartbeat-status,
+.fieldset-actions {
   justify-content: space-between;
+}
+
+.fieldset-actions .hint {
+  max-width: 70%;
 }
 
 fieldset {
@@ -522,6 +531,30 @@ fieldset {
 legend {
   font-weight: 500;
   padding: 0 4px;
+}
+
+.settings-tabs {
+  --indicator-color: var(--primary);
+}
+
+.settings-tabs::part(tabs) {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tabs sl-tab-panel {
+  padding: 16px 2px 0;
+}
+
+.settings-tabs fieldset {
+  margin-bottom: 14px;
+}
+
+.settings-tabs fieldset:last-of-type {
+  margin-bottom: 0;
+}
+
+.settings-tabs .grid {
+  margin-bottom: 0;
 }
 
 #profile-form > sl-checkbox {

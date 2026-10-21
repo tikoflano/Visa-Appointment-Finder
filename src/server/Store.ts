@@ -9,6 +9,10 @@ import {
 } from "../botResult";
 import { Action } from "../types";
 import { SecretBox } from "./SecretBox";
+import {
+  normalizeOpenwaBaseUrl,
+  parseWhatsAppDestinations,
+} from "./whatsapp";
 
 type Db = Database<sqlite3.Database, sqlite3.Statement>;
 
@@ -23,6 +27,7 @@ export interface ProfileInput {
   visaPassword?: string;
   visaProcessId: string;
   emailDestination: string;
+  whatsappDestination: string;
   minDate: string | null;
   maxDate: string | null;
   actions: Action[];
@@ -41,6 +46,10 @@ export interface Settings {
   gmailUser: string;
   hasGmailAppPassword: boolean;
   emailAdminDestination: string;
+  openwaBaseUrl: string;
+  openwaSessionId: string;
+  hasOpenwaApiKey: boolean;
+  whatsappAdminDestination: string;
   intervalMinutes: number;
   heartbeatEnabled: boolean;
   heartbeatMinutes: number;
@@ -52,11 +61,15 @@ export interface Settings {
 }
 
 export interface SettingsInput
-  extends Omit<Settings, "hasGmailAppPassword" | "lastHeartbeatAt"> {
+  extends Omit<
+    Settings,
+    "hasGmailAppPassword" | "hasOpenwaApiKey" | "lastHeartbeatAt"
+  > {
   gmailAppPassword?: string;
+  openwaApiKey?: string;
 }
 
-export type NotificationKind = "appointment" | "heartbeat" | "failure";
+export type NotificationKind = "appointment" | "heartbeat" | "failure" | "test";
 export type NotificationStatus = "sent" | "failed";
 
 export interface NotificationInput {
@@ -69,6 +82,7 @@ export interface NotificationInput {
   subject: string;
   summary: string;
   error?: string | null;
+  dedupeKey?: string | null;
 }
 
 export interface NotificationRecord {
@@ -124,6 +138,9 @@ function normalizeEmailList(value: unknown): string {
 const DEFAULT_SETTINGS: Record<string, string> = {
   gmail_user: "",
   email_admin_destination: "",
+  openwa_base_url: "",
+  openwa_session_id: "",
+  whatsapp_admin_destination: "",
   interval_minutes: "5",
   heartbeat_enabled: "1",
   heartbeat_minutes: "1440",
@@ -135,6 +152,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 
 const profileSecretContext = (id: number) => `profile:${id}:visa_password`;
 const GMAIL_SECRET_CONTEXT = "setting:gmail_app_password";
+const OPENWA_SECRET_CONTEXT = "setting:openwa_api_key";
 
 export class ValidationError extends Error {}
 
@@ -168,6 +186,7 @@ export class Store {
         visa_password_enc TEXT NOT NULL,
         visa_process_id TEXT NOT NULL,
         email_destination TEXT NOT NULL DEFAULT '',
+        whatsapp_destination TEXT NOT NULL DEFAULT '',
         min_date TEXT,
         max_date TEXT,
         actions TEXT NOT NULL DEFAULT '',
@@ -218,7 +237,8 @@ export class Store {
         recipients TEXT NOT NULL DEFAULT '',
         subject TEXT NOT NULL DEFAULT '',
         summary TEXT NOT NULL DEFAULT '',
-        error TEXT
+        error TEXT,
+        dedupe_key TEXT
       );
 
       CREATE INDEX IF NOT EXISTS run_profile_idx ON run (profile_id, id);
@@ -255,12 +275,28 @@ export class Store {
         "ALTER TABLE profile ADD COLUMN current_appointment_date TEXT",
       );
     }
+    if (
+      !profileColumns.some((column) => column.name === "whatsapp_destination")
+    ) {
+      await this.db.exec(
+        "ALTER TABLE profile ADD COLUMN whatsapp_destination TEXT NOT NULL DEFAULT ''",
+      );
+    }
 
     const runColumns: { name: string }[] = await this.db.all(
       "PRAGMA table_info(run)",
     );
     if (!runColumns.some((column) => column.name === "result")) {
       await this.db.exec("ALTER TABLE run ADD COLUMN result TEXT");
+    }
+
+    const notificationColumns: { name: string }[] = await this.db.all(
+      "PRAGMA table_info(notification)",
+    );
+    if (
+      !notificationColumns.some((column) => column.name === "dedupe_key")
+    ) {
+      await this.db.exec("ALTER TABLE notification ADD COLUMN dedupe_key TEXT");
     }
 
     await this.verifyMasterKey();
@@ -311,6 +347,12 @@ export class Store {
       gmailUser: await this.getSetting("gmail_user"),
       hasGmailAppPassword: !!(await this.getRawSetting("gmail_app_password")),
       emailAdminDestination: await this.getSetting("email_admin_destination"),
+      openwaBaseUrl: await this.getSetting("openwa_base_url"),
+      openwaSessionId: await this.getSetting("openwa_session_id"),
+      hasOpenwaApiKey: !!(await this.getRawSetting("openwa_api_key")),
+      whatsappAdminDestination: await this.getSetting(
+        "whatsapp_admin_destination",
+      ),
       intervalMinutes: Number(await this.getSetting("interval_minutes")),
       heartbeatEnabled: (await this.getSetting("heartbeat_enabled")) === "1",
       heartbeatMinutes: Number(await this.getSetting("heartbeat_minutes")),
@@ -335,6 +377,24 @@ export class Store {
     await this.setRawSetting(
       "email_admin_destination",
       normalizeEmailList(input.emailAdminDestination),
+    );
+    try {
+      await this.setRawSetting(
+        "openwa_base_url",
+        normalizeOpenwaBaseUrl(input.openwaBaseUrl),
+      );
+      await this.setRawSetting(
+        "whatsapp_admin_destination",
+        parseWhatsAppDestinations(input.whatsappAdminDestination),
+      );
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    await this.setRawSetting(
+      "openwa_session_id",
+      String(input.openwaSessionId ?? "").trim(),
     );
     await this.setRawSetting(
       "interval_minutes",
@@ -367,6 +427,12 @@ export class Store {
         this.box.encrypt(input.gmailAppPassword, GMAIL_SECRET_CONTEXT),
       );
     }
+    if (input.openwaApiKey) {
+      await this.setRawSetting(
+        "openwa_api_key",
+        this.box.encrypt(input.openwaApiKey, OPENWA_SECRET_CONTEXT),
+      );
+    }
     return this.getSettings();
   }
 
@@ -380,6 +446,11 @@ export class Store {
   async getGmailAppPassword(): Promise<string> {
     const encrypted = await this.getRawSetting("gmail_app_password");
     return encrypted ? this.box.decrypt(encrypted, GMAIL_SECRET_CONTEXT) : "";
+  }
+
+  async getOpenwaApiKey(): Promise<string> {
+    const encrypted = await this.getRawSetting("openwa_api_key");
+    return encrypted ? this.box.decrypt(encrypted, OPENWA_SECRET_CONTEXT) : "";
   }
 
   // ---- Admin password ----
@@ -420,6 +491,7 @@ export class Store {
       visaEmail: row.visa_email,
       visaProcessId: row.visa_process_id,
       emailDestination: row.email_destination,
+      whatsappDestination: row.whatsapp_destination || "",
       minDate: row.min_date,
       maxDate: row.max_date,
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
@@ -436,7 +508,17 @@ export class Store {
     const name = String(input.name ?? "").trim();
     const visaEmail = String(input.visaEmail ?? "").trim();
     const visaProcessId = String(input.visaProcessId ?? "").trim();
-    const emailDestination = String(input.emailDestination ?? "").trim();
+    const emailDestination = normalizeEmailList(input.emailDestination);
+    let whatsappDestination = "";
+    try {
+      whatsappDestination = parseWhatsAppDestinations(
+        input.whatsappDestination,
+      );
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     const minDate = input.minDate || null;
     const maxDate = input.maxDate || null;
     const actions = Array.isArray(input.actions) ? input.actions : [];
@@ -461,8 +543,14 @@ export class Store {
     if (actions.some((a) => !validActions.includes(a))) {
       throw new ValidationError("Invalid action");
     }
-    if (actions.includes(Action.Notify) && !emailDestination) {
-      throw new ValidationError("Notify emails are required for notify action");
+    if (
+      actions.includes(Action.Notify) &&
+      !emailDestination &&
+      !whatsappDestination
+    ) {
+      throw new ValidationError(
+        "Notify emails or WhatsApp numbers are required for notify action",
+      );
     }
 
     return {
@@ -471,6 +559,7 @@ export class Store {
       visaPassword: input.visaPassword || undefined,
       visaProcessId,
       emailDestination,
+      whatsappDestination,
       minDate,
       maxDate,
       actions,
@@ -547,13 +636,14 @@ export class Store {
     try {
       const result = await this.db.run(
         `INSERT INTO profile (name, visa_email, visa_password_enc, visa_process_id, email_destination,
-           min_date, max_date, actions, enabled, created_at, updated_at)
-         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           whatsapp_destination, min_date, max_date, actions, enabled, created_at, updated_at)
+         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.name,
           input.visaEmail,
           input.visaProcessId,
           input.emailDestination,
+          input.whatsappDestination,
           input.minDate,
           input.maxDate,
           input.actions.join(","),
@@ -599,7 +689,7 @@ export class Store {
     try {
       await this.db.run(
         `UPDATE profile SET name = ?, visa_email = ?, visa_process_id = ?, email_destination = ?,
-           min_date = ?, max_date = ?, actions = ?, enabled = ?,
+           whatsapp_destination = ?, min_date = ?, max_date = ?, actions = ?, enabled = ?,
            updated_at = ?
          WHERE id = ?`,
         [
@@ -607,6 +697,7 @@ export class Store {
           input.visaEmail,
           input.visaProcessId,
           input.emailDestination,
+          input.whatsappDestination,
           input.minDate,
           input.maxDate,
           input.actions.join(","),
@@ -891,8 +982,8 @@ export class Store {
   async insertNotification(input: NotificationInput): Promise<number> {
     const result = await this.db.run(
       `INSERT INTO notification
-         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (sent_at, kind, channel, status, profile_id, run_id, recipients, subject, summary, error, dedupe_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         new Date().toISOString(),
         input.kind,
@@ -904,6 +995,7 @@ export class Store {
         input.subject,
         input.summary,
         input.error ?? null,
+        input.dedupeKey ?? null,
       ],
     );
     return result.lastID!;
@@ -916,6 +1008,7 @@ export class Store {
       to?: string;
       kind?: NotificationKind;
       status?: NotificationStatus;
+      channel?: string;
     } = {},
   ): Promise<NotificationRecord[]> {
     const clauses: string[] = [];
@@ -936,6 +1029,10 @@ export class Store {
       clauses.push("n.status = ?");
       params.push(range.status);
     }
+    if (range.channel) {
+      clauses.push("n.channel = ?");
+      params.push(range.channel);
+    }
     params.push(limit);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = await this.db.all(
@@ -948,6 +1045,21 @@ export class Store {
       params,
     );
     return rows.map((row) => this.toNotification(row));
+  }
+
+  async lastSentDedupeKey(
+    profileId: number,
+    kind: NotificationKind,
+    channel: string,
+  ): Promise<string | null> {
+    const row = await this.db.get<{ dedupe_key: string | null }>(
+      `SELECT dedupe_key FROM notification
+       WHERE profile_id = ? AND kind = ? AND channel = ? AND status = 'sent'
+         AND dedupe_key IS NOT NULL AND dedupe_key != ''
+       ORDER BY id DESC LIMIT 1`,
+      [profileId, kind, channel],
+    );
+    return row?.dedupe_key ?? null;
   }
 
   async claimHeartbeatIfDue(
@@ -1010,7 +1122,7 @@ export class Store {
 
   private toNotification(row: any): NotificationRecord {
     const kind: NotificationKind =
-      row.kind === "heartbeat" || row.kind === "failure"
+      row.kind === "heartbeat" || row.kind === "failure" || row.kind === "test"
         ? row.kind
         : "appointment";
     return {
