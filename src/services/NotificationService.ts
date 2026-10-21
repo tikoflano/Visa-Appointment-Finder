@@ -14,6 +14,7 @@ export interface MailContent {
   summary: string;
   text: string;
   html: string;
+  whatsapp: string;
 }
 
 export interface HeartbeatReport {
@@ -22,38 +23,146 @@ export interface HeartbeatReport {
   anySuccess: boolean;
 }
 
+const ACCENT = {
+  info: "#2457d6",
+  ok: "#1d7a46",
+  warn: "#a15c07",
+  bad: "#b42318",
+} as const;
+
+function appointmentUrl(processId: string): string {
+  return `https://ais.usvisa-info.com/en-cl/niv/schedule/${processId}/appointment`;
+}
+
+function wrapEmail(options: {
+  kicker: string;
+  title: string;
+  body: string;
+  accent?: string;
+}): string {
+  const accent = options.accent || ACCENT.info;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(options.title)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f6f8;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f6f8;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #dde1e8;">
+          <tr>
+            <td style="background:#16357a;padding:20px 24px;color:#ffffff;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;">
+              <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.78;">${escapeHtml(options.kicker)}</div>
+              <div style="font-size:20px;font-weight:650;letter-spacing:-0.03em;margin-top:4px;">${escapeHtml(options.title)}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="height:3px;background:${accent};font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+          <tr>
+            <td style="padding:24px;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:15px;line-height:1.5;color:#1d2330;">
+              ${options.body}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 24px;background:#f5f6f8;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:12px;line-height:1.45;color:#6b7385;">
+              Sent by Visa Appointment Finder
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+function emailList(items: string[], empty: string): string {
+  const rows = items.length
+    ? items.map((item) => `<li style="margin:6px 0;">${item}</li>`).join("")
+    : `<li style="margin:6px 0;color:#6b7385;">${escapeHtml(empty)}</li>`;
+  return `<ul style="margin:0;padding:0 0 0 18px;">${rows}</ul>`;
+}
+
+function whatsappList(items: string[], empty: string): string {
+  return items.length ? items.map((item) => `- ${item}`).join("\n") : `- ${empty}`;
+}
+
 export function composeAppointmentNotification(options: {
   processId: string;
-  firstDate: Date;
-  extraDates?: string;
+  dates: Date[];
 }): MailContent {
-  const first = formatDate(options.firstDate);
-  const url = `https://ais.usvisa-info.com/en-cl/niv/schedule/${options.processId}/appointment`;
-  const extra = options.extraDates
-    ? ` Other available appointments: ${options.extraDates}`
-    : "";
+  const formatted = options.dates.map((date) => formatDate(date));
+  const first = formatted[0] || "an upcoming date";
+  const extras = formatted.slice(1);
+  const url = appointmentUrl(options.processId);
   const subject = "Visa appointment available";
-  const summary = options.extraDates
-    ? `Available ${first}. Other: ${options.extraDates}`
+  const summary = extras.length
+    ? `Available ${first}. Other: ${extras.join(" / ")}`
     : `Available ${first}`;
-  const text = `There is a visa appointment available on ${first}. Go to ${url} to schedule it.${extra}`;
-  return { subject, summary, text, html: text };
+
+  const extraText = extras.length
+    ? `\n\nOther available appointments:\n${extras.map((date) => `- ${date}`).join("\n")}`
+    : "";
+  const text = `There is a visa appointment available on ${first}.${extraText}\n\nGo to ${url} to schedule it.`;
+
+  const extraHtml = extras.length
+    ? `<p style="margin:20px 0 8px;font-size:13px;font-weight:650;color:#1d2330;">Other available appointments</p>
+        ${emailList(extras.map((date) => escapeHtml(date)), "")}`
+    : "";
+  const html = wrapEmail({
+    kicker: "AIS · Chile",
+    title: "Visa appointment available",
+    accent: ACCENT.ok,
+    body: `<p style="margin:0 0 16px;">A matching date opened on the Santiago consulate calendar.</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 4px;">
+          <tr>
+            <td style="padding:14px 16px;background:#eef7f1;border-left:4px solid ${ACCENT.ok};">
+              <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${ACCENT.ok};font-weight:650;">Earliest date</div>
+              <div style="font-size:20px;font-weight:650;letter-spacing:-0.03em;color:#0b1738;margin-top:4px;">${escapeHtml(first)}</div>
+            </td>
+          </tr>
+        </table>
+        ${extraHtml}
+        <p style="margin:24px 0 0;">
+          <a href="${escapeHtml(url)}" style="display:inline-block;background:#2457d6;color:#ffffff;text-decoration:none;padding:12px 18px;font-weight:650;font-size:14px;">Schedule appointment</a>
+        </p>
+        <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#6b7385;">
+          Or open this link:<br>
+          <a href="${escapeHtml(url)}" style="color:#2457d6;word-break:break-all;">${escapeHtml(url)}</a>
+        </p>`,
+  });
+
+  const whatsapp = [
+    "*Visa appointment available*",
+    "",
+    "A matching date opened on AIS Chile:",
+    "",
+    `*${first}*`,
+    ...(extras.length
+      ? ["", "Other available appointments:", ...extras.map((date) => `- ${date}`)]
+      : []),
+    "",
+    "Schedule it here:",
+    url,
+  ].join("\n");
+
+  return { subject, summary, text, html, whatsapp };
 }
 
 export function composeHeartbeatNotification(options: {
   report: HeartbeatReport;
 }): MailContent {
   const healthy = options.report.anySuccess;
-  const profileLines = options.report.enabledProfiles.length
-    ? options.report.enabledProfiles
-        .map((profile) => `${profile.name} (${profile.visaProcessId})`)
-        .join("\n")
-    : "None enabled";
-  const runLines = options.report.recentRuns.length
-    ? options.report.recentRuns
-        .map((run) => `${run.startedAt} — ${run.name} — ${run.status}`)
-        .join("\n")
-    : "No runs recorded yet";
+  const profileLines = options.report.enabledProfiles.map(
+    (profile) => `${profile.name} (${profile.visaProcessId})`,
+  );
+  const runLines = options.report.recentRuns.map(
+    (run) => `${run.startedAt} — ${run.name} — ${run.status}`,
+  );
   const statusLine = healthy
     ? "At least one of the last 5 runs succeeded."
     : "None of the last 5 runs succeeded. An admin needs to check the management UI.";
@@ -64,32 +173,56 @@ export function composeHeartbeatNotification(options: {
   const summary = healthy
     ? `Healthy · ${enabled} enabled profile${enabled === 1 ? "" : "s"}`
     : `Needs attention · ${enabled} enabled profile${enabled === 1 ? "" : "s"}`;
-  const text = `Scheduled visa appointment checks are running.\n\nEnabled profiles:\n${profileLines}\n\nLast 5 runs:\n${runLines}\n\n${statusLine}`;
-  const html = `<p>Scheduled visa appointment checks are running.</p>
-        <p><strong>Enabled profiles</strong></p>
-        <ul>${
-          options.report.enabledProfiles.length
-            ? options.report.enabledProfiles
-                .map(
-                  (profile) =>
-                    `<li>${escapeHtml(profile.name)} (${escapeHtml(profile.visaProcessId)})</li>`,
-                )
-                .join("")
-            : "<li>None enabled</li>"
-        }</ul>
-        <p><strong>Last 5 runs</strong></p>
-        <ul>${
-          options.report.recentRuns.length
-            ? options.report.recentRuns
-                .map(
-                  (run) =>
-                    `<li>${escapeHtml(run.startedAt)} — ${escapeHtml(run.name)} — ${escapeHtml(run.status)}</li>`,
-                )
-                .join("")
-            : "<li>No runs recorded yet</li>"
-        }</ul>
-        <p><strong>${statusLine}</strong></p>`;
-  return { subject, summary, text, html };
+  const text = `Scheduled visa appointment checks are running.\n\nEnabled profiles:\n${whatsappList(profileLines, "None enabled")}\n\nLast 5 runs:\n${whatsappList(runLines, "No runs recorded yet")}\n\n${statusLine}`;
+  const statusColor = healthy ? ACCENT.ok : ACCENT.warn;
+  const html = wrapEmail({
+    kicker: "Scheduler",
+    title: subject,
+    accent: statusColor,
+    body: `<p style="margin:0 0 16px;">Scheduled visa appointment checks are running.</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px;">
+          <tr>
+            <td style="padding:12px 14px;background:${healthy ? "#eef7f1" : "#fbf3e6"};border-left:4px solid ${statusColor};">
+              <div style="font-size:13px;font-weight:650;color:${statusColor};">${escapeHtml(statusLine)}</div>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 8px;font-size:13px;font-weight:650;">Enabled profiles</p>
+        ${emailList(
+          options.report.enabledProfiles.map(
+            (profile) =>
+              `${escapeHtml(profile.name)} <span style="color:#6b7385;">(${escapeHtml(profile.visaProcessId)})</span>`,
+          ),
+          "None enabled",
+        )}
+        <p style="margin:20px 0 8px;font-size:13px;font-weight:650;">Last 5 runs</p>
+        ${emailList(
+          options.report.recentRuns.map(
+            (run) =>
+              `${escapeHtml(run.startedAt)} — ${escapeHtml(run.name)} — ${escapeHtml(run.status)}`,
+          ),
+          "No runs recorded yet",
+        )}`,
+  });
+  const whatsapp = [
+    `*${subject}*`,
+    "",
+    "Scheduled visa appointment checks are running.",
+    "",
+    `_${statusLine}_`,
+    "",
+    "*Enabled profiles*",
+    whatsappList(
+      options.report.enabledProfiles.map(
+        (profile) => `${profile.name} (\`${profile.visaProcessId}\`)`,
+      ),
+      "None enabled",
+    ),
+    "",
+    "*Last 5 runs*",
+    whatsappList(runLines, "No runs recorded yet"),
+  ].join("\n");
+  return { subject, summary, text, html, whatsapp };
 }
 
 export function composeFailureAlarm(options: {
@@ -103,45 +236,82 @@ export function composeFailureAlarm(options: {
   const latestError = latest?.error || latest?.status || "unknown error";
   const subject = `Visa check failed ${options.threshold} times in a row: ${options.profileName}`;
   const summary = `${options.profileName}: ${options.threshold} consecutive errors. Latest: ${latestError}`;
-  const errorLines = options.errors.length
-    ? options.errors
-        .map((run) => `${run.startedAt} — ${run.error || run.status}`)
-        .join("\n")
-    : "No error details";
+  const errorLines = options.errors.map(
+    (run) => `${run.startedAt} — ${run.error || run.status}`,
+  );
   const text = `The scheduler recorded ${options.threshold} consecutive errors for ${options.profileName}.
 ${options.visaEmail} · process ${options.visaProcessId}
 Latest error: ${latestError}
 
 Recent failures:
-${errorLines}
+${whatsappList(errorLines, "No error details")}
 
 Open the management UI to inspect the run and fix the profile.`;
-  const html = `<p>The scheduler recorded <strong>${options.threshold}</strong> consecutive errors for <strong>${escapeHtml(
-    options.profileName,
-  )}</strong>.</p>
-        <p>${escapeHtml(options.visaEmail)} · process ${escapeHtml(options.visaProcessId)}</p>
-        <p>Latest error: ${escapeHtml(latestError)}</p>
-        <p><strong>Recent failures</strong></p>
-        <ul>${
-          options.errors.length
-            ? options.errors
-                .map(
-                  (run) =>
-                    `<li>${escapeHtml(run.startedAt)} — ${escapeHtml(run.error || run.status)}</li>`,
-                )
-                .join("")
-            : "<li>No error details</li>"
-        }</ul>
-        <p>Open the management UI to inspect the run and fix the profile.</p>`;
-  return { subject, summary, text, html };
+  const html = wrapEmail({
+    kicker: "Failure alarm",
+    title: `Check failed ${options.threshold} times in a row`,
+    accent: ACCENT.bad,
+    body: `<p style="margin:0 0 16px;">The scheduler recorded <strong>${options.threshold}</strong> consecutive errors for <strong>${escapeHtml(options.profileName)}</strong>.</p>
+        <p style="margin:0 0 16px;color:#6b7385;">${escapeHtml(options.visaEmail)} · process ${escapeHtml(options.visaProcessId)}</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px;">
+          <tr>
+            <td style="padding:12px 14px;background:#fdecea;border-left:4px solid ${ACCENT.bad};">
+              <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${ACCENT.bad};font-weight:650;">Latest error</div>
+              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#1d2330;">${escapeHtml(latestError)}</div>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 8px;font-size:13px;font-weight:650;">Recent failures</p>
+        ${emailList(
+          options.errors.map(
+            (run) =>
+              `${escapeHtml(run.startedAt)} — ${escapeHtml(run.error || run.status)}`,
+          ),
+          "No error details",
+        )}
+        <p style="margin:20px 0 0;">Open the management UI to inspect the run and fix the profile.</p>`,
+  });
+  const whatsapp = [
+    `*Visa check failed ${options.threshold} times in a row*`,
+    "",
+    `The scheduler recorded *${options.threshold}* consecutive errors for *${options.profileName}*.`,
+    "",
+    `${options.visaEmail} · process \`${options.visaProcessId}\``,
+    "",
+    "Latest error:",
+    "```",
+    latestError,
+    "```",
+    "",
+    "*Recent failures*",
+    whatsappList(errorLines, "No error details"),
+    "",
+    "Open the management UI to inspect the run and fix the profile.",
+  ].join("\n");
+  return { subject, summary, text, html, whatsapp };
 }
 
-export function composeTestNotification(channel: "email" | "whatsapp"): MailContent {
+export function composeTestNotification(
+  channel: "email" | "whatsapp",
+): MailContent {
   const via = channel === "whatsapp" ? "WhatsApp" : "email";
   const subject = `[TEST] Visa Appointment Finder (${via})`;
   const summary = `Test ${via} notification`;
   const text = `This is a test ${via} message from Visa Appointment Finder. If you received it, this channel is working.`;
-  return { subject, summary, text, html: `<p>${text}</p>` };
+  const html = wrapEmail({
+    kicker: "Test",
+    title: "Visa Appointment Finder",
+    accent: ACCENT.info,
+    body: `<p style="margin:0 0 12px;">This is a test ${via} message.</p>
+        <p style="margin:0;color:#6b7385;">If you received it, this channel is working.</p>`,
+  });
+  const whatsapp = [
+    "*Test* from Visa Appointment Finder",
+    "",
+    "This is a test WhatsApp message.",
+    "If you received it, this channel is working.",
+  ].join("\n");
+  return { subject, summary, text, html, whatsapp };
 }
 
 export class NotificationService {
@@ -160,6 +330,7 @@ export class NotificationService {
       options.destination,
       content.subject,
       content.html,
+      content.text,
     );
     return content;
   }
@@ -177,6 +348,7 @@ export class NotificationService {
       options.destination,
       content.subject,
       content.html,
+      content.text,
     );
     return content;
   }
@@ -190,6 +362,7 @@ export class NotificationService {
       options.destination,
       content.subject,
       content.html,
+      content.text,
     );
     return content;
   }
@@ -198,8 +371,7 @@ export class NotificationService {
     to: string;
     bcc?: string;
     processId: string;
-    firstDate: Date;
-    extraDates?: string;
+    dates: Date[];
   }): Promise<MailContent> {
     const to = options.to.trim();
     if (!to) {
@@ -210,6 +382,7 @@ export class NotificationService {
       to,
       content.subject,
       content.html,
+      content.text,
       options.bcc,
     );
     return content;

@@ -8,7 +8,7 @@ import {
   NotificationService,
 } from "../services/NotificationService";
 import { Action } from "../types";
-import { formatDate, parseDateAsUtc } from "../utils/dateUtils";
+import { parseDateAsUtc } from "../utils/dateUtils";
 import {
   isFailureRun,
   NotificationInput,
@@ -169,7 +169,7 @@ export class Notifier {
         apiKey,
         sessionId,
       });
-      await client.sendToMany(chats, content.text, `visa-test-${Date.now()}`);
+      await client.sendToMany(chats, content.whatsapp, `visa-test-${Date.now()}`);
       await this.logNotification({
         kind: "test",
         channel: "whatsapp",
@@ -212,16 +212,10 @@ export class Notifier {
     const profile = await this.store.getProfile(profileId);
     if (!profile?.actions.includes(Action.Notify)) return result;
 
-    const firstDate = parseDateAsUtc(result.dates[0]);
-    const extraDates =
-      result.dates
-        .slice(1)
-        .map((iso) => formatDate(parseDateAsUtc(iso)))
-        .join(" / ") || undefined;
+    const dates = result.dates.map((iso) => parseDateAsUtc(iso));
     const content = composeAppointmentNotification({
       processId: profile.visaProcessId,
-      firstDate,
-      extraDates,
+      dates,
     });
     const datesKey = appointmentDatesKey(result.dates);
     const settings = await this.store.getSettings();
@@ -236,8 +230,7 @@ export class Notifier {
         runId,
         content,
         datesKey,
-        firstDate,
-        extraDates,
+        dates,
         to: emailTo,
         bcc: settings.emailAdminDestination || undefined,
       });
@@ -257,7 +250,7 @@ export class Notifier {
         recipients: waRecipients.join(", "),
         subject: content.subject,
         summary: content.summary,
-        text: content.text,
+        text: content.whatsapp,
         datesKey,
         settings,
       });
@@ -391,7 +384,7 @@ export class Notifier {
         recipients: adminWhatsapp.join(", "),
         subject: content.subject,
         summary: content.summary,
-        text: content.text,
+        text: content.whatsapp,
         settings,
         chats: adminWhatsapp,
       });
@@ -521,7 +514,7 @@ export class Notifier {
         recipients: adminWhatsapp.join(", "),
         subject: content.subject,
         summary: content.summary,
-        text: content.text,
+        text: content.whatsapp,
         settings,
         chats: adminWhatsapp,
       });
@@ -533,13 +526,11 @@ export class Notifier {
     runId: number;
     content: { subject: string; summary: string };
     datesKey: string;
-    firstDate: Date;
-    extraDates?: string;
+    dates: Date[];
     to: string;
     bcc?: string;
   }): Promise<"sent" | "skipped" | "failed"> {
-    const { profile, runId, content, datesKey, firstDate, extraDates, to, bcc } =
-      options;
+    const { profile, runId, content, datesKey, dates, to, bcc } = options;
     if (
       await this.store.shouldSkipAppointmentDedupe(
         profile.id,
@@ -586,8 +577,7 @@ export class Notifier {
         to,
         bcc,
         processId: profile.visaProcessId,
-        firstDate,
-        extraDates,
+        dates,
       });
       await this.logNotification({
         kind: "appointment",

@@ -31,6 +31,7 @@ export class EmailService {
     to: string,
     subject: string,
     html: string,
+    text?: string,
     bcc?: string,
   ): Promise<void> {
     await this.transporter.sendMail({
@@ -38,6 +39,7 @@ export class EmailService {
       to: parseAddressList(to),
       bcc: parseAddressList(bcc),
       subject,
+      text,
       html,
     });
   }

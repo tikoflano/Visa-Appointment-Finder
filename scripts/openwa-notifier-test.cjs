@@ -220,6 +220,18 @@ function startSessionMock(apiKey, qrCode) {
     mock.received[0].body.text.includes("2026"),
     `body should mention the date: ${mock.received[0].body.text}`,
   );
+  assert(
+    mock.received[0].body.text.includes("*Visa appointment available*"),
+    `whatsapp should bold the title: ${mock.received[0].body.text}`,
+  );
+  assert(
+    mock.received[0].body.text.includes("\n"),
+    "whatsapp should use line breaks",
+  );
+  assert(
+    mock.received[0].body.text.includes("- "),
+    `whatsapp should list extra dates: ${mock.received[0].body.text}`,
+  );
 
   const second = await notifier.notifyForRun(profile.id, 2, "success", result);
   assert(second.notified === false, "same dates should be debounced");
@@ -285,6 +297,10 @@ function startSessionMock(apiKey, qrCode) {
   assert(heartbeat.sent === true, "heartbeat should send");
   assert(mock.received.length === 1, `heartbeat should message admin once, got ${mock.received.length}`);
   assert(mock.received[0].body.chatId === "56911111111@c.us", "heartbeat chat");
+  assert(
+    mock.received[0].body.text.includes("*Enabled profiles*"),
+    `heartbeat should use whatsapp markup: ${mock.received[0].body.text}`,
+  );
 
   mock.received.length = 0;
   const testSend = await notifier.sendTest({ channel: "whatsapp" });
@@ -293,6 +309,10 @@ function startSessionMock(apiKey, qrCode) {
   assert(
     mock.received[0].body.text.includes("test"),
     `test body should say test: ${mock.received[0].body.text}`,
+  );
+  assert(
+    mock.received[0].body.text.includes("*Test*"),
+    `test whatsapp should bold the label: ${mock.received[0].body.text}`,
   );
 
   let testThrew = false;
