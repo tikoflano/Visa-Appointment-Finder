@@ -40,6 +40,8 @@ export interface Profile extends Omit<ProfileInput, "visaPassword"> {
   id: number;
   hasPassword: boolean;
   currentAppointmentDate: string | null;
+  /** Canonical AIS visa-class multiset, e.g. "H1B1x1,H4x4". */
+  visaFingerprint: string | null;
   rescheduleRemaining: number | null;
   rescheduleMaximum: number | null;
   createdAt: string;
@@ -343,6 +345,11 @@ export class Store {
         "ALTER TABLE profile ADD COLUMN whatsapp_destination TEXT NOT NULL DEFAULT ''",
       );
     }
+    if (!profileColumns.some((column) => column.name === "visa_fingerprint")) {
+      await this.db.exec(
+        "ALTER TABLE profile ADD COLUMN visa_fingerprint TEXT",
+      );
+    }
 
     const runColumns: { name: string }[] = await this.db.all(
       "PRAGMA table_info(run)",
@@ -577,6 +584,7 @@ export class Store {
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
       enabled: !!row.enabled,
       currentAppointmentDate: row.current_appointment_date ?? null,
+      visaFingerprint: row.visa_fingerprint ?? null,
       rescheduleRemaining: integerOrNull(row.reschedule_remaining),
       rescheduleMaximum: integerOrNull(row.reschedule_maximum),
       hasPassword: !!row.visa_password_enc,
@@ -676,16 +684,22 @@ export class Store {
     return this.box.decrypt(row.visa_password_enc, profileSecretContext(id));
   }
 
-  private async assertCanEnable(candidate: {
+  async assertCanEnable(candidate: {
     id?: number;
     minDate: string | null;
     maxDate: string | null;
     currentAppointmentDate: string | null;
+    visaFingerprint: string | null;
   }): Promise<void> {
     const window = profileSearchWindow(candidate);
     if (window.kind === "unknown") {
       throw new ValidationError(
-        "Run this profile once first so we know the booked appointment date, or set a latest date.",
+        "No booked appointment on AIS and no latest date set. Set a latest date, or book an appointment first.",
+      );
+    }
+    if (!candidate.visaFingerprint) {
+      throw new ValidationError(
+        "Visa class fingerprint is missing. Enable again so we can re-check AIS.",
       );
     }
     const others = (await this.listProfiles()).filter(
@@ -695,23 +709,28 @@ export class Store {
     for (const other of others) {
       const otherWindow = profileSearchWindow(other);
       if (otherWindow.kind === "unknown") continue;
-      if (windowsOverlap(window, otherWindow)) names.push(other.name);
+      if (!windowsOverlap(window, otherWindow)) continue;
+      // Same (or unknown peer) fingerprint hunting the same days — refuse.
+      if (
+        !other.visaFingerprint ||
+        other.visaFingerprint === candidate.visaFingerprint
+      ) {
+        names.push(other.name);
+      }
     }
     if (names.length) {
       throw new ValidationError(
-        `Date window overlaps enabled profile${names.length > 1 ? "s" : ""} ${names.join(", ")}.`,
+        `Date window overlaps enabled profile${names.length > 1 ? "s" : ""} ${names.join(", ")} with the same visa classes (${candidate.visaFingerprint}).`,
       );
     }
   }
 
+  /**
+   * Insert always starts disabled. Callers that want enabled must probe AIS
+   * then call setProfileEnabled(true).
+   */
   async createProfile(rawInput: ProfileInput): Promise<Profile> {
     const input = this.validateProfile(rawInput, true);
-    if (input.enabled) {
-      await this.assertCanEnable({
-        ...input,
-        currentAppointmentDate: null,
-      });
-    }
     const now = new Date().toISOString();
 
     let id: number;
@@ -719,7 +738,7 @@ export class Store {
       const result = await this.db.run(
         `INSERT INTO profile (name, visa_email, visa_password_enc, visa_process_id, email_destination,
            whatsapp_destination, min_date, max_date, actions, enabled, created_at, updated_at)
-         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
         [
           input.name,
           input.visaEmail,
@@ -729,7 +748,6 @@ export class Store {
           input.minDate,
           input.maxDate,
           input.actions.join(","),
-          input.enabled ? 1 : 0,
           now,
           now,
         ],
@@ -753,18 +771,25 @@ export class Store {
     return (await this.getProfile(id))!;
   }
 
+  /**
+   * Updates fields. Enabling is left to the caller via setProfileEnabled after
+   * an AIS probe when turning a profile on.
+   */
   async updateProfile(id: number, rawInput: ProfileInput): Promise<Profile> {
     const existing = await this.getProfile(id);
     if (!existing) {
       throw new ValidationError("Profile not found");
     }
     const input = this.validateProfile(rawInput, false);
-    if (input.enabled) {
+    // Keep current enabled flag here; enable transitions go through probe.
+    const enabled = existing.enabled && input.enabled;
+    if (enabled) {
       await this.assertCanEnable({
         id,
         minDate: input.minDate,
         maxDate: input.maxDate,
         currentAppointmentDate: existing.currentAppointmentDate,
+        visaFingerprint: existing.visaFingerprint,
       });
     }
 
@@ -783,7 +808,7 @@ export class Store {
           input.minDate,
           input.maxDate,
           input.actions.join(","),
-          input.enabled ? 1 : 0,
+          enabled ? 1 : 0,
           new Date().toISOString(),
           id,
         ],
@@ -820,6 +845,16 @@ export class Store {
     await this.db.run(
       "UPDATE profile SET current_appointment_date = ?, updated_at = ? WHERE id = ?",
       [date, new Date().toISOString(), id],
+    );
+  }
+
+  async setVisaFingerprint(
+    id: number,
+    fingerprint: string | null,
+  ): Promise<void> {
+    await this.db.run(
+      "UPDATE profile SET visa_fingerprint = ?, updated_at = ? WHERE id = ?",
+      [fingerprint, new Date().toISOString(), id],
     );
   }
 

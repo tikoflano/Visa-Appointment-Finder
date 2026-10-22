@@ -198,7 +198,13 @@
             </sl-tooltip>
           </div>
         </fieldset>
-        <sl-checkbox name="enabled">Enabled (run on schedule)</sl-checkbox>
+        <div class="check-row">
+          <sl-checkbox name="enabled">Enabled (run on schedule)</sl-checkbox>
+          <sl-tooltip placement="bottom">
+            <span slot="content">Turning on logs into AIS first to refresh the booked date and visa classes. Overlapping date windows are allowed when visa fingerprints differ.</span>
+            <sl-icon-button class="help-tip" name="question-circle" label="About enabling"></sl-icon-button>
+          </sl-tooltip>
+        </div>
         <sl-alert variant="danger" data-error></sl-alert>
       </form>
       <div slot="footer" class="dialog-actions">

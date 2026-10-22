@@ -14,6 +14,8 @@ export interface BotResult {
   outcome: BotOutcome;
   currentAppointment: string | null;
   dates: string[];
+  /** Abbreviated AIS visa class per applicant, e.g. ["H1B1", "H4", "H4"]. */
+  visaClasses: string[];
   error: string | null;
   notified: boolean;
   rescheduled: boolean;
@@ -26,11 +28,35 @@ export function emptyBotResult(): BotResult {
     outcome: "error",
     currentAppointment: null,
     dates: [],
+    visaClasses: [],
     error: null,
     notified: false,
     rescheduled: false,
     rescheduleLimit: null,
   };
+}
+
+/** First whitespace-delimited token: "H1B1 Chilean…" → "H1B1". */
+export function abbreviateVisaClass(label: string): string | null {
+  const token = String(label ?? "")
+    .trim()
+    .split(/\s+/)[0];
+  return token || null;
+}
+
+/** Canonical multiset: ["H4","H1B1","H4"] → "H1B1x1,H4x2". */
+export function visaFingerprint(classes: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const raw of classes) {
+    const code = String(raw ?? "").trim();
+    if (!code) continue;
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  if (!counts.size) return null;
+  return [...counts.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((code) => `${code}x${counts.get(code)}`)
+    .join(",");
 }
 
 function integerInRange(value: unknown, min: number, max: number): number | null {
@@ -94,6 +120,12 @@ export function normalizeBotResult(raw: unknown): BotResult {
   const dates = Array.isArray(value.dates)
     ? value.dates.filter((date): date is string => typeof date === "string")
     : [];
+  const visaClasses = Array.isArray(value.visaClasses)
+    ? value.visaClasses
+        .filter((code): code is string => typeof code === "string")
+        .map((code) => code.trim())
+        .filter(Boolean)
+    : [];
   return {
     ok: outcome !== "error",
     outcome,
@@ -102,6 +134,7 @@ export function normalizeBotResult(raw: unknown): BotResult {
         ? value.currentAppointment
         : null,
     dates,
+    visaClasses,
     error:
       outcome === "error"
         ? typeof value.error === "string" && value.error

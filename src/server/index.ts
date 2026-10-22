@@ -249,6 +249,43 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     return profile;
   };
 
+  /**
+   * Probe AIS (credentials, booked date, visa fingerprint), then enable.
+   * Leaves the profile disabled on probe or overlap failure.
+   */
+  const enableWithProbe = async (id: number) => {
+    await requireProfile(id);
+    if (scheduler.getState(id) !== "idle") {
+      throw new ValidationError(
+        "Profile is already running or queued; try again when idle",
+      );
+    }
+    let probe;
+    try {
+      probe = await scheduler.runProbe(id);
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (probe.status !== "success" || !probe.result || probe.result.outcome === "error") {
+      throw new ValidationError(
+        probe.result?.error ||
+          (probe.status === "timeout"
+            ? "AIS check timed out"
+            : probe.status === "cancelled"
+              ? "AIS check was cancelled"
+              : "AIS check failed"),
+      );
+    }
+    if (!probe.result.visaClasses.length) {
+      throw new ValidationError("AIS check returned no visa classes");
+    }
+    await store.setProfileEnabled(id, true);
+    // Probe must not delay the first real search/notify — start one now.
+    scheduler.enqueue(id, "enable");
+  };
+
   const routes: Route[] = [
     {
       method: "GET",
@@ -327,9 +364,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         const intervalMs = settings.intervalMinutes * 60 * 1000;
         return profiles.map((profile) => {
           const lastRun = latestRuns.get(profile.id) ?? null;
+          // Probe-only runs do not advance the search schedule.
+          const lastSearchStartedAt =
+            lastRun && lastRun.trigger !== "probe"
+              ? lastRun.startedAt
+              : null;
           const lag = scheduler.isBehind(
             profile.id,
-            lastRun?.startedAt,
+            lastSearchStartedAt,
             intervalMs,
           );
           return {
@@ -339,7 +381,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
             hasSuccessfulRun: successfulRuns.has(profile.id),
             nextRunAt: Scheduler.nextRunAt(
               profile.enabled,
-              lastRun?.startedAt,
+              lastSearchStartedAt,
               intervalMs,
             ),
             behind: lag.behind,
@@ -351,13 +393,51 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     {
       method: "POST",
       pattern: /^\/api\/profiles$/,
-      handler: async ({ body }) => store.createProfile(body),
+      handler: async ({ body }) => {
+        const wantEnabled = !!body.enabled;
+        const profile = await store.createProfile({ ...body, enabled: false });
+        if (wantEnabled) {
+          try {
+            await enableWithProbe(profile.id);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            throw new ValidationError(
+              `Profile saved but not enabled: ${message}`,
+            );
+          }
+        }
+        return (await store.getProfile(profile.id))!;
+      },
     },
     {
       method: "PUT",
       pattern: /^\/api\/profiles\/(\d+)$/,
-      handler: async ({ params, body }) =>
-        store.updateProfile(profileId(params), body),
+      handler: async ({ params, body }) => {
+        const id = profileId(params);
+        const existing = await requireProfile(id);
+        const wantEnabled = !!body.enabled;
+        const turningOn = wantEnabled && !existing.enabled;
+        // updateProfile keeps enabled only when already on; turning on uses probe.
+        await store.updateProfile(id, {
+          ...body,
+          enabled: wantEnabled && existing.enabled,
+        });
+        if (turningOn) {
+          try {
+            await enableWithProbe(id);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            throw new ValidationError(
+              `Profile saved but not enabled: ${message}`,
+            );
+          }
+        } else if (!wantEnabled && existing.enabled) {
+          await store.setProfileEnabled(id, false);
+        }
+        return (await store.getProfile(id))!;
+      },
     },
     {
       method: "POST",
@@ -381,8 +461,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "POST",
       pattern: /^\/api\/profiles\/(\d+)\/enabled$/,
       handler: async ({ params, body }) => {
-        await requireProfile(profileId(params));
-        await store.setProfileEnabled(profileId(params), !!body.enabled);
+        const id = profileId(params);
+        await requireProfile(id);
+        if (body.enabled) {
+          await enableWithProbe(id);
+        } else {
+          await store.setProfileEnabled(id, false);
+        }
         return { ok: true };
       },
     },

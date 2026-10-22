@@ -1,6 +1,10 @@
 import { ChildProcess, spawn } from "child_process";
 import path from "path";
-import { parseVisaResult } from "../botResult";
+import {
+  parseVisaResult,
+  visaFingerprint,
+  type BotResult,
+} from "../botResult";
 import { Action } from "../types";
 import { Notifier } from "./Notifier";
 import { Profile, RunStatus, Store } from "./Store";
@@ -76,6 +80,20 @@ export class Scheduler {
   }
 
   /**
+   * Scrape-only run used before enabling: credentials, booked date, visa
+   * fingerprint. Waits until the child exits. Throws if the profile is busy.
+   */
+  async runProbe(profileId: number): Promise<{
+    status: RunStatus;
+    result: BotResult | null;
+  }> {
+    if (this.getState(profileId) !== "idle") {
+      throw new Error("Profile is already running or queued");
+    }
+    return this.startRun(profileId, "probe", { probe: true });
+  }
+
+  /**
    * When this enabled profile is next due: last run start + Check every.
    * Never-run profiles are due immediately. Disabled profiles have no next run.
    */
@@ -139,7 +157,10 @@ export class Scheduler {
       const intervalMs = settings.intervalMinutes * 60 * 1000;
       for (const profile of profiles) {
         if (!profile.enabled) continue;
-        const lastStart = latestRuns.get(profile.id)?.startedAt;
+        const last = latestRuns.get(profile.id);
+        // Enable probes refresh metadata only; they do not satisfy the search interval.
+        const lastStart =
+          last && last.trigger !== "probe" ? last.startedAt : undefined;
         const due =
           !lastStart || Date.now() - +new Date(lastStart) >= intervalMs;
         if (due) this.enqueue(profile.id, "schedule");
@@ -157,7 +178,8 @@ export class Scheduler {
         const { maxConcurrentRuns } = await this.store.getSettings();
         while (this.queue.length && this.active.size < maxConcurrentRuns) {
           const item = this.queue.shift()!;
-          await this.launch(item.profileId, item.trigger);
+          // Start only — do not wait for the child to exit.
+          void this.startRun(item.profileId, item.trigger, { probe: false });
         }
       } catch (error) {
         console.error("Failed to start queued runs:", error);
@@ -165,9 +187,15 @@ export class Scheduler {
     });
   }
 
-  private async launch(profileId: number, trigger: string): Promise<void> {
+  private async startRun(
+    profileId: number,
+    trigger: string,
+    options: { probe: boolean },
+  ): Promise<{ status: RunStatus; result: BotResult | null }> {
     const profile = await this.store.getProfile(profileId);
-    if (!profile) return;
+    if (!profile) {
+      return { status: "failed", result: null };
+    }
 
     const runId = await this.store.createRun(profileId, trigger);
     let env: NodeJS.ProcessEnv;
@@ -176,18 +204,24 @@ export class Scheduler {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.finishRun(runId, "failed", null, `${message}\n`);
-      this.notifier.queueFailureAlarm(profileId, "failed", null);
-      return;
+      if (!options.probe) {
+        this.notifier.queueFailureAlarm(profileId, "failed", null);
+      }
+      return { status: "failed", result: null };
     }
 
     const { runTimeoutMinutes, botDebug } = await this.store.getSettings();
-    const child = spawn(process.execPath, this.buildArgs(profile, botDebug), {
-      env,
-      cwd: path.resolve(__dirname, "..", ".."),
-      stdio: ["ignore", "pipe", "pipe"],
-      // Own process group, so cancelling also kills the Chromium children.
-      detached: true,
-    });
+    const child = spawn(
+      process.execPath,
+      this.buildArgs(profile, botDebug, options.probe),
+      {
+        env,
+        cwd: path.resolve(__dirname, "..", ".."),
+        stdio: ["ignore", "pipe", "pipe"],
+        // Own process group, so cancelling also kills the Chromium children.
+        detached: true,
+      },
+    );
 
     const run: ActiveRun = { runId, child, cancelled: false, debug: botDebug };
     this.active.set(profileId, run);
@@ -208,58 +242,72 @@ export class Scheduler {
       setTimeout(() => this.signal(child, "SIGKILL"), KILL_GRACE_MS).unref();
     }, runTimeoutMinutes * 60 * 1000);
 
-    let finished = false;
-    const finish = async (exitCode: number | null, extra = "") => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timeout);
+    return new Promise((resolve) => {
+      let finished = false;
+      const finish = async (exitCode: number | null, extra = "") => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
 
-      let status: RunStatus = exitCode === 0 ? "success" : "failed";
-      if (run.cancelled) status = "cancelled";
-      else if (timedOut) status = "timeout";
+        let status: RunStatus = exitCode === 0 ? "success" : "failed";
+        if (run.cancelled) status = "cancelled";
+        else if (timedOut) status = "timeout";
 
-      const output = (run.debug ? stderr : "") + extra;
-      const parsed = parseVisaResult(stdout);
-      if (parsed?.outcome === "error" && status === "success") {
-        status = "failed";
-      }
-
-      let result = parsed;
-      try {
-        result = await this.notifier.notifyForRun(
-          profileId,
-          runId,
-          status,
-          parsed,
-        );
-      } catch (error) {
-        console.error(`Notification failed for profile ${profileId}:`, error);
-      }
-
-      try {
-        await this.store.finishRun(runId, status, exitCode, output, result);
-        if (result?.currentAppointment) {
-          await this.store.setCurrentAppointmentDate(
-            profileId,
-            result.currentAppointment,
-          );
+        const output = (run.debug ? stderr : "") + extra;
+        const parsed = parseVisaResult(stdout);
+        if (parsed?.outcome === "error" && status === "success") {
+          status = "failed";
         }
-        if (result?.rescheduleLimit) {
-          await this.store.setRescheduleLimit(
-            profileId,
-            result.rescheduleLimit,
-          );
-        }
-        this.notifier.queueFailureAlarm(profileId, status, result);
-      } catch (error) {
-        console.error(`Failed to record run ${runId}:`, error);
-      }
-      this.active.delete(profileId);
-      this.drain();
-    };
 
-    child.on("error", (error) => finish(null, `\n${error.message}\n`));
-    child.on("close", (code) => finish(code));
+        let result = parsed;
+        if (!options.probe) {
+          try {
+            result = await this.notifier.notifyForRun(
+              profileId,
+              runId,
+              status,
+              parsed,
+            );
+          } catch (error) {
+            console.error(
+              `Notification failed for profile ${profileId}:`,
+              error,
+            );
+          }
+        }
+
+        try {
+          await this.store.finishRun(runId, status, exitCode, output, result);
+          if (result && result.outcome !== "error") {
+            await this.store.setCurrentAppointmentDate(
+              profileId,
+              result.currentAppointment,
+            );
+            const fingerprint = visaFingerprint(result.visaClasses);
+            if (fingerprint) {
+              await this.store.setVisaFingerprint(profileId, fingerprint);
+            }
+          }
+          if (result?.rescheduleLimit) {
+            await this.store.setRescheduleLimit(
+              profileId,
+              result.rescheduleLimit,
+            );
+          }
+          if (!options.probe) {
+            this.notifier.queueFailureAlarm(profileId, status, result);
+          }
+        } catch (error) {
+          console.error(`Failed to record run ${runId}:`, error);
+        }
+        this.active.delete(profileId);
+        this.drain();
+        resolve({ status, result });
+      };
+
+      child.on("error", (error) => finish(null, `\n${error.message}\n`));
+      child.on("close", (code) => finish(code));
+    });
   }
 
   private async buildEnv(profile: Profile): Promise<NodeJS.ProcessEnv> {
@@ -276,14 +324,22 @@ export class Scheduler {
     };
   }
 
-  private buildArgs(profile: Profile, debug: boolean): string[] {
+  private buildArgs(
+    profile: Profile,
+    debug: boolean,
+    probe: boolean,
+  ): string[] {
     const args = [RUNNER_PATH, "--headless"];
-    if (profile.actions.includes(Action.Reschedule)) {
+    if (probe) {
+      args.push("--probe");
+    } else if (profile.actions.includes(Action.Reschedule)) {
       args.push("--reschedule");
     }
     // The runner accepts YYYY-MM-DD as well as MM/DD/YYYY.
-    if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
-    if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
+    if (!probe) {
+      if (profile.minDate) args.push(`--minDate=${profile.minDate}`);
+      if (profile.maxDate) args.push(`--maxDate=${profile.maxDate}`);
+    }
     if (debug) args.push("--debug");
     return args;
   }

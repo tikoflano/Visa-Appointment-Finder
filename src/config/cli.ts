@@ -18,6 +18,12 @@ export function parseCliArgs(): Config {
           "Book the first matching date. The server decides whether to pass this.",
         default: false,
       },
+      probe: {
+        type: "boolean",
+        describe:
+          "Validate credentials and read booked date plus visa classes only. Skip the appointment calendar.",
+        default: false,
+      },
       maxDate: {
         type: "string",
         alias: "max-date",
@@ -63,6 +69,7 @@ export function validateAndParseDates(config: Config): ParsedConfig {
   return {
     headless: config.headless,
     reschedule: config.reschedule,
+    probe: config.probe,
     maxDate,
     minDate,
     debug: config.debug,

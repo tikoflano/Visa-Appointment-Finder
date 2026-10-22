@@ -42,6 +42,14 @@ import { addDays, formatDate } from "./utils/dateUtils";
 
     const booked = await appointmentService.getCurrentAppointmentDate();
     result.currentAppointment = booked ? toIsoDate(booked) : null;
+    result.visaClasses = await appointmentService.getVisaClasses();
+
+    if (parsedConfig.probe) {
+      result.ok = true;
+      result.outcome = "none";
+      console.log("Probe complete");
+      return;
+    }
 
     // filterAppointments excludes maxDate, so a user-provided max date is
     // pushed one day forward to make it inclusive.

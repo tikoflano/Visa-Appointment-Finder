@@ -1,5 +1,9 @@
 import { Page } from "playwright";
-import { parseRescheduleLimit, type RescheduleLimit } from "../botResult";
+import {
+  abbreviateVisaClass,
+  parseRescheduleLimit,
+  type RescheduleLimit,
+} from "../botResult";
 import { formatDate, parseDateAsUtc } from "../utils/dateUtils";
 
 export class AppointmentService {
@@ -8,6 +12,21 @@ export class AppointmentService {
 
   constructor(page: Page) {
     this.page = page;
+  }
+
+  private processId(): string {
+    const id = process.env.VISA_PROCESS_ID;
+    if (!id) throw new Error("Missing VISA_PROCESS_ID");
+    return id;
+  }
+
+  private processCard() {
+    const id = this.processId();
+    return this.page.locator(".application").filter({
+      has: this.page.locator(
+        `a[href="/en-cl/niv/schedule/${id}/continue_actions"]`,
+      ),
+    });
   }
 
   private async getFormMethod(): Promise<string> {
@@ -25,7 +44,7 @@ export class AppointmentService {
 
   async checkIfVisaProcessExists(): Promise<void> {
     const visaProcess = this.page.locator(
-      `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/continue_actions"]`,
+      `a[href="/en-cl/niv/schedule/${this.processId()}/continue_actions"]`,
     );
     try {
       await visaProcess.waitFor({ state: "visible", timeout: 1000 });
@@ -37,9 +56,9 @@ export class AppointmentService {
 
   async getCurrentAppointmentDate(): Promise<Date | undefined> {
     const getDirectionsLink = this.page.locator(
-      `a[href="/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/addresses/consulate"]`,
+      `a[href="/en-cl/niv/schedule/${this.processId()}/addresses/consulate"]`,
     );
-    const consularAppointment = this.page
+    const consularAppointment = this.processCard()
       .locator(".consular-appt")
       .filter({ has: getDirectionsLink });
 
@@ -58,6 +77,44 @@ export class AppointmentService {
       console.log("Current appointment not found");
       return undefined;
     }
+  }
+
+  /**
+   * Abbreviated Visa Class codes for applicants on this process card.
+   * Finds the column by thead "Visa Class" (Petition and other columns shift the index).
+   * Uses textContent so Foundation's show-for-medium column still works.
+   */
+  async getVisaClasses(): Promise<string[]> {
+    const card = this.processCard();
+    await card.first().waitFor({ state: "attached", timeout: 5000 });
+
+    const labels = await card.locator("table").evaluate((table) => {
+      const headers = [...table.querySelectorAll("thead th")].map((th) =>
+        (th.textContent || "").trim().toLowerCase(),
+      );
+      const index = headers.findIndex((label) => label === "visa class");
+      if (index < 0) return { error: "Visa Class column not found", labels: [] as string[] };
+      const labels = [...table.querySelectorAll("tbody tr")].map((row) => {
+        const cells = row.querySelectorAll("td");
+        return cells[index]?.textContent?.trim() || "";
+      });
+      return { error: null as string | null, labels };
+    });
+
+    if (labels.error) {
+      throw new Error(labels.error);
+    }
+
+    const classes: string[] = [];
+    for (const label of labels.labels) {
+      const code = abbreviateVisaClass(label);
+      if (code) classes.push(code);
+    }
+    if (!classes.length) {
+      throw new Error("No visa classes found for this process");
+    }
+    console.log(`Visa classes: ${classes.join(", ")}`);
+    return classes;
   }
 
   async handleCheckboxSteps(): Promise<void> {
@@ -96,7 +153,7 @@ export class AppointmentService {
   async findAvailableAppointments(): Promise<Date[]> {
     // Get available appointments
     await this.page.goto(
-      `https://ais.usvisa-info.com/en-cl/niv/schedule/${process.env.VISA_PROCESS_ID}/appointment`,
+      `https://ais.usvisa-info.com/en-cl/niv/schedule/${this.processId()}/appointment`,
     );
 
     await this.handleCheckboxSteps();

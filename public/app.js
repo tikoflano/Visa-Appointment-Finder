@@ -31,6 +31,8 @@ let hideDisabled = localStorage.getItem(HIDE_DISABLED_KEY) === "1";
 let refreshTimer;
 let setupMode = false;
 let confirmResolve;
+/** Profile ids currently waiting on an enable-time AIS probe. */
+const probingIds = new Set();
 
 async function api(method, url, body) {
   const response = await fetch(url, {
@@ -459,14 +461,41 @@ function iconAction(name, label, onclick, className) {
   );
 }
 
+function formatVisaFingerprint(fingerprint) {
+  if (!fingerprint) return "";
+  return String(fingerprint)
+    .split(",")
+    .map((part) => part.replace(/x(\d+)$/i, "×$1"))
+    .join(", ");
+}
+
+/** Enable-time AIS probe in flight (local optimistic set or server run). */
+function isProbing(profile) {
+  if (probingIds.has(profile.id)) return true;
+  if (profile.state === "idle") return false;
+  return (
+    profile.lastRun?.trigger === "probe" && profile.lastRun?.status === "running"
+  );
+}
+
 function enableSwitch(profile) {
+  const probing = isProbing(profile);
   const toggle = document.createElement("sl-switch");
   toggle.size = "small";
   toggle.checked = !!profile.enabled;
-  toggle.title = profile.enabled ? "Disable" : "Enable";
+  toggle.disabled = probing;
+  toggle.title = probing
+    ? "Checking AIS…"
+    : profile.enabled
+      ? "Disable"
+      : "Enable";
   toggle.setAttribute(
     "aria-label",
-    profile.enabled ? "Disable profile" : "Enable profile",
+    probing
+      ? "Checking AIS"
+      : profile.enabled
+        ? "Disable profile"
+        : "Enable profile",
   );
   toggle.addEventListener("sl-change", (event) => {
     toggleEnabled(profile, event.target.checked);
@@ -486,7 +515,20 @@ function renderProfiles() {
         "tr",
         { class: profile.enabled ? "" : "disabled" },
         el("td", { class: "col-enabled" }, enableSwitch(profile)),
-        el("td", {}, el("strong", {}, profile.name), el("div", { class: "sub" }, profile.visaEmail)),
+        el(
+          "td",
+          {},
+          el("strong", {}, profile.name),
+          el("div", { class: "sub" }, profile.visaEmail),
+          el(
+            "div",
+            { class: "sub" },
+            isProbing(profile)
+              ? "Checking AIS…"
+              : formatVisaFingerprint(profile.visaFingerprint) ||
+                  el("span", { class: "hint" }, "visas unknown"),
+          ),
+        ),
         el(
           "td",
           { class: "nowrap" },
@@ -553,10 +595,17 @@ hideDisabledSwitch.addEventListener("sl-change", () => {
 });
 
 async function toggleEnabled(profile, enabled) {
+  if (enabled) {
+    probingIds.add(profile.id);
+    renderProfiles();
+    toast("Checking AIS account…");
+  }
   try {
     await api("POST", `/api/profiles/${profile.id}/enabled`, { enabled });
   } catch (error) {
     toast(error.message);
+  } finally {
+    probingIds.delete(profile.id);
   }
   refresh();
 }
@@ -672,7 +721,10 @@ profileForm.addEventListener("submit", async (event) => {
     enabled: named(form, "enabled").checked,
   };
 
+  const turningOn =
+    body.enabled && (!editingProfile || !editingProfile.enabled);
   try {
+    if (turningOn) toast("Checking AIS account…");
     if (editingProfile) {
       await api("PUT", `/api/profiles/${editingProfile.id}`, body);
     } else {
@@ -682,6 +734,8 @@ profileForm.addEventListener("submit", async (event) => {
     refresh();
   } catch (error) {
     setError(profileForm, error.message);
+    // Create/update may have saved a disabled profile before enable failed.
+    refresh();
   }
 });
 
@@ -1234,6 +1288,17 @@ function resultDetail(run) {
   } else {
     if (result.error) rows.push(["Error", result.error]);
     rows.push(["Booked appointment", formatDate(result.currentAppointment) || "—"]);
+    if (result.visaClasses?.length) {
+      const counts = new Map();
+      for (const code of result.visaClasses) {
+        counts.set(code, (counts.get(code) || 0) + 1);
+      }
+      const fingerprint = [...counts.keys()]
+        .sort((a, b) => a.localeCompare(b))
+        .map((code) => `${code}x${counts.get(code)}`)
+        .join(",");
+      rows.push(["Visa classes", formatVisaFingerprint(fingerprint)]);
+    }
     if (result.dates?.length) {
       rows.push(["Dates", result.dates.map((iso) => formatDate(iso) || iso).join(", ")]);
     }
