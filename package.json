@@ -9,7 +9,8 @@
     "start": "node build/server/index.js",
     "dev": "./run.sh dev",
     "cli": "node build/server/cli.js",
-    "test:openwa": "tsc && node scripts/openwa-notifier-test.cjs"
+    "test:openwa": "tsc && node scripts/openwa-notifier-test.cjs",
+    "test:intake": "tsc && node scripts/intake-test.cjs"
   },
   "keywords": [],
   "author": "",

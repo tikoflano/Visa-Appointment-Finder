@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import { IntakeMonitor } from "./IntakeMonitor";
 import { Notifier } from "./Notifier";
 import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
@@ -136,14 +137,15 @@ function parseNotifiedQuery(value: string | null): boolean | undefined {
 
 function parseNotificationKind(
   value: string | null,
-): "appointment" | "heartbeat" | "failure" | "test" | undefined {
+): "appointment" | "heartbeat" | "failure" | "test" | "intake" | undefined {
   const raw = value?.trim().toLowerCase();
   if (!raw) return undefined;
   if (
     raw === "appointment" ||
     raw === "heartbeat" ||
     raw === "failure" ||
-    raw === "test"
+    raw === "test" ||
+    raw === "intake"
   ) {
     return raw;
   }
@@ -238,6 +240,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const notifier = new Notifier(store);
   const scheduler = new Scheduler(store, notifier);
+  const intake = new IntakeMonitor(store, notifier);
   const sessions = new Sessions();
   const failedLogins: number[] = [];
 
@@ -392,6 +395,43 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "POST",
+      pattern: /^\/api\/profiles\/intake$/,
+      handler: async ({ body }) => {
+        const profile = await store.createIntake(
+          String(body.name ?? ""),
+          String(body.phone ?? ""),
+        );
+        try {
+          await intake.sendPrompt(profile);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await store.setIntakeError(profile.id, message);
+        }
+        intake.kick();
+        return (await store.getProfile(profile.id))!;
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/profiles\/(\d+)\/intake\/resend$/,
+      handler: async ({ params }) => {
+        const profile = await requireProfile(profileId(params));
+        if (profile.intakeStatus === "ready") {
+          throw new ValidationError("This profile is already complete");
+        }
+        try {
+          await intake.sendPrompt(profile);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await store.setIntakeError(profile.id, message);
+          throw new ValidationError(message);
+        }
+        intake.kick();
+        return (await store.getProfile(profile.id))!;
+      },
+    },
+    {
+      method: "POST",
       pattern: /^\/api\/profiles$/,
       handler: async ({ body }) => {
         const wantEnabled = !!body.enabled;
@@ -419,24 +459,28 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         const wantEnabled = !!body.enabled;
         const turningOn = wantEnabled && !existing.enabled;
         // updateProfile keeps enabled only when already on; turning on uses probe.
-        await store.updateProfile(id, {
-          ...body,
-          enabled: wantEnabled && existing.enabled,
-        });
-        if (turningOn) {
-          try {
-            await enableWithProbe(id);
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            throw new ValidationError(
-              `Profile saved but not enabled: ${message}`,
-            );
+        try {
+          await store.updateProfile(id, {
+            ...body,
+            enabled: wantEnabled && existing.enabled,
+          });
+          if (turningOn) {
+            try {
+              await enableWithProbe(id);
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              throw new ValidationError(
+                `Profile saved but not enabled: ${message}`,
+              );
+            }
+          } else if (!wantEnabled && existing.enabled) {
+            await store.setProfileEnabled(id, false);
           }
-        } else if (!wantEnabled && existing.enabled) {
-          await store.setProfileEnabled(id, false);
+          return (await store.getProfile(id))!;
+        } finally {
+          intake.kick();
         }
-        return (await store.getProfile(id))!;
       },
     },
     {
@@ -475,8 +519,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "DELETE",
       pattern: /^\/api\/profiles\/(\d+)$/,
       handler: async ({ params }) => {
-        scheduler.cancel(profileId(params));
-        await store.deleteProfile(profileId(params));
+        const id = profileId(params);
+        scheduler.cancel(id);
+        intake.cancel(id);
+        try {
+          await store.deleteProfile(id);
+        } catch (error) {
+          intake.restore(id);
+          throw error;
+        }
         return { ok: true };
       },
     },
@@ -484,8 +535,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "POST",
       pattern: /^\/api\/profiles\/(\d+)\/run$/,
       handler: async ({ params }) => {
-        await requireProfile(profileId(params));
-        if (!scheduler.enqueue(profileId(params), "manual")) {
+        const profile = await requireProfile(profileId(params));
+        if (profile.intakeStatus !== "ready") {
+          throw new ValidationError(
+            "This profile is still waiting for visa account details",
+          );
+        }
+        if (!scheduler.enqueue(profile.id, "manual")) {
           throw new HttpError(409, "Already running or queued");
         }
         return { ok: true };
@@ -503,6 +559,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       pattern: /^\/api\/profiles\/(\d+)\/logs$/,
       handler: async ({ params, url }) => {
         const profile = await requireProfile(profileId(params));
+        if (!profile.visaProcessId) return [];
         const limit = Math.min(Number(url.searchParams.get("limit")) || 200, 1000);
         return store.listLogs(profile.visaProcessId, limit);
       },
@@ -718,6 +775,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     }
   });
 
+  intake.start();
   if (DEV) {
     if (HOST !== "127.0.0.1" && HOST !== "localhost") {
       throw Error("VISA_DEV is only allowed when HOST is 127.0.0.1");
@@ -749,6 +807,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     shuttingDown = true;
     console.log("Shutting down...");
     server.close();
+    intake.stop();
     await scheduler.stop();
     await notifier.stop();
     await db.close();

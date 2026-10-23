@@ -11,8 +11,10 @@ import {
 } from "../botResult";
 import { Action } from "../types";
 import { SecretBox } from "./SecretBox";
+import { INTAKE_WINDOW_MS } from "./intakeSchedule";
 import {
   configuredOpenwaBaseUrl,
+  parseIntakePhone,
   parseWhatsAppDestinations,
 } from "./whatsapp";
 
@@ -36,9 +38,23 @@ export interface ProfileInput {
   enabled: boolean;
 }
 
-export interface Profile extends Omit<ProfileInput, "visaPassword"> {
+export type IntakeStatus = "ready" | "pending" | "expired";
+
+export interface Profile
+  extends Omit<ProfileInput, "visaPassword" | "visaProcessId"> {
   id: number;
+  /** Null while a WhatsApp intake has not been filled in yet. */
+  visaProcessId: string | null;
   hasPassword: boolean;
+  contactPhone: string;
+  intakeStatus: IntakeStatus;
+  intakeError: string | null;
+  /** First prompt time. Polls read messages from here. */
+  intakePromptMs: number | null;
+  /** Start of the current 24-hour watch. Resend moves this forward. */
+  intakeWindowStartedMs: number | null;
+  intakeLastPollMs: number | null;
+  intakeExpiresAt: string | null;
   currentAppointmentDate: string | null;
   /** Canonical AIS visa-class multiset, e.g. "H1B1x1,H4x4". */
   visaFingerprint: string | null;
@@ -84,7 +100,12 @@ export interface SettingsInput
   heartbeatTimeUtc?: string;
 }
 
-export type NotificationKind = "appointment" | "heartbeat" | "failure" | "test";
+export type NotificationKind =
+  | "appointment"
+  | "heartbeat"
+  | "failure"
+  | "test"
+  | "intake";
 export type NotificationStatus = "sent" | "failed" | "skipped";
 
 export interface NotificationInput {
@@ -146,6 +167,23 @@ function integerOrNull(value: unknown): number | null {
   if (typeof value === "number" && Number.isInteger(value)) return value;
   if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
   return null;
+}
+
+function epochMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+function parseSkipMessageIds(value: unknown): string[] {
+  if (!value || typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => String(item)).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function normalizeHeartbeatTimeUtc(value: unknown): string {
@@ -350,6 +388,39 @@ export class Store {
         "ALTER TABLE profile ADD COLUMN visa_fingerprint TEXT",
       );
     }
+    const ensureColumn = async (name: string, ddl: string) => {
+      const latest: { name: string }[] = await this.db.all(
+        "PRAGMA table_info(profile)",
+      );
+      if (!latest.some((column) => column.name === name)) {
+        await this.db.exec(`ALTER TABLE profile ADD COLUMN ${ddl}`);
+      }
+    };
+    await ensureColumn(
+      "contact_phone",
+      "contact_phone TEXT NOT NULL DEFAULT ''",
+    );
+    await ensureColumn(
+      "intake_status",
+      "intake_status TEXT NOT NULL DEFAULT 'ready'",
+    );
+    await ensureColumn("intake_prompt_ms", "intake_prompt_ms INTEGER");
+    await ensureColumn(
+      "intake_window_started_ms",
+      "intake_window_started_ms INTEGER",
+    );
+    await ensureColumn("intake_last_poll_ms", "intake_last_poll_ms INTEGER");
+    await ensureColumn("intake_error", "intake_error TEXT");
+    await ensureColumn(
+      "intake_skip_message_ids",
+      "intake_skip_message_ids TEXT NOT NULL DEFAULT ''",
+    );
+    // 1 for existing rows so a migration does not text people about old profiles.
+    await ensureColumn(
+      "intake_confirmed",
+      "intake_confirmed INTEGER NOT NULL DEFAULT 1",
+    );
+    await this.relaxProfileVisaColumns();
 
     const runColumns: { name: string }[] = await this.db.all(
       "PRAGMA table_info(run)",
@@ -372,6 +443,79 @@ export class Store {
     );
 
     await this.verifyMasterKey();
+  }
+
+  /**
+   * Pending intakes have no visa email or process id yet. SQLite cannot
+   * alter nullability, so copy the table once when those columns are NOT NULL.
+   */
+  private async relaxProfileVisaColumns(): Promise<void> {
+    const columns: { name: string; notnull: number }[] = await this.db.all(
+      "PRAGMA table_info(profile)",
+    );
+    const email = columns.find((column) => column.name === "visa_email");
+    const processId = columns.find((column) => column.name === "visa_process_id");
+    if (!email?.notnull && !processId?.notnull) return;
+
+    await this.db.exec("BEGIN IMMEDIATE");
+    try {
+      await this.db.exec(`
+        CREATE TABLE profile_next (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          visa_email TEXT,
+          visa_password_enc TEXT NOT NULL DEFAULT '',
+          visa_process_id TEXT,
+          email_destination TEXT NOT NULL DEFAULT '',
+          whatsapp_destination TEXT NOT NULL DEFAULT '',
+          min_date TEXT,
+          max_date TEXT,
+          actions TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 0,
+          current_appointment_date TEXT,
+          reschedule_remaining INTEGER,
+          reschedule_maximum INTEGER,
+          visa_fingerprint TEXT,
+          contact_phone TEXT NOT NULL DEFAULT '',
+          intake_status TEXT NOT NULL DEFAULT 'ready',
+          intake_prompt_ms INTEGER,
+          intake_window_started_ms INTEGER,
+          intake_last_poll_ms INTEGER,
+          intake_error TEXT,
+          intake_skip_message_ids TEXT NOT NULL DEFAULT '',
+          intake_confirmed INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO profile_next (
+          id, name, visa_email, visa_password_enc, visa_process_id, email_destination,
+          whatsapp_destination, min_date, max_date, actions, enabled,
+          current_appointment_date, reschedule_remaining, reschedule_maximum,
+          visa_fingerprint, contact_phone, intake_status, intake_prompt_ms,
+          intake_window_started_ms, intake_last_poll_ms, intake_error,
+          intake_skip_message_ids, intake_confirmed, created_at, updated_at
+        )
+        SELECT
+          id, name, visa_email, visa_password_enc, visa_process_id, email_destination,
+          whatsapp_destination, min_date, max_date, actions, enabled,
+          current_appointment_date, reschedule_remaining, reschedule_maximum,
+          visa_fingerprint, contact_phone, intake_status, intake_prompt_ms,
+          intake_window_started_ms, intake_last_poll_ms, intake_error,
+          intake_skip_message_ids, intake_confirmed, created_at, updated_at
+        FROM profile;
+        DROP TABLE profile;
+        ALTER TABLE profile_next RENAME TO profile;
+        CREATE UNIQUE INDEX profile_process_idx ON profile (visa_process_id);
+      `);
+      await this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        await this.db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
+      }
+      throw error;
+    }
   }
 
   // Fails fast at startup instead of on the first scheduled run when the
@@ -572,17 +716,32 @@ export class Store {
   // ---- Profiles ----
 
   private toProfile(row: any): Profile {
+    const intakeStatus: IntakeStatus =
+      row.intake_status === "pending" || row.intake_status === "expired"
+        ? row.intake_status
+        : "ready";
+    const intakeWindowStartedMs = epochMs(row.intake_window_started_ms);
     return {
       id: row.id,
       name: row.name,
-      visaEmail: row.visa_email,
-      visaProcessId: row.visa_process_id,
+      visaEmail: row.visa_email || "",
+      visaProcessId: row.visa_process_id ?? null,
       emailDestination: row.email_destination,
       whatsappDestination: row.whatsapp_destination || "",
       minDate: row.min_date,
       maxDate: row.max_date,
       actions: row.actions ? (row.actions.split(",") as Action[]) : [],
       enabled: !!row.enabled,
+      contactPhone: row.contact_phone || "",
+      intakeStatus,
+      intakeError: row.intake_error ?? null,
+      intakePromptMs: epochMs(row.intake_prompt_ms),
+      intakeWindowStartedMs,
+      intakeLastPollMs: epochMs(row.intake_last_poll_ms),
+      intakeExpiresAt:
+        intakeWindowStartedMs == null
+          ? null
+          : new Date(intakeWindowStartedMs + INTAKE_WINDOW_MS).toISOString(),
       currentAppointmentDate: row.current_appointment_date ?? null,
       visaFingerprint: row.visa_fingerprint ?? null,
       rescheduleRemaining: integerOrNull(row.reschedule_remaining),
@@ -681,6 +840,7 @@ export class Store {
       [id],
     );
     if (!row) throw Error(`Profile ${id} not found`);
+    if (!row.visa_password_enc) return "";
     return this.box.decrypt(row.visa_password_enc, profileSecretContext(id));
   }
 
@@ -771,16 +931,197 @@ export class Store {
     return (await this.getProfile(id))!;
   }
 
+  /** Name and phone only. The visa account stays empty until a reply arrives. */
+  async createIntake(name: string, phone: string): Promise<Profile> {
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) throw new ValidationError("Name is required");
+    let contactPhone = "";
+    try {
+      contactPhone = parseIntakePhone(phone);
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    const pending = await this.db.get<{ id: number }>(
+      "SELECT id FROM profile WHERE contact_phone = ? AND intake_status = 'pending'",
+      [contactPhone],
+    );
+    if (pending) {
+      throw new ValidationError(
+        "That phone number already has a profile waiting for WhatsApp",
+      );
+    }
+    const now = new Date().toISOString();
+    let id: number;
+    try {
+      const result = await this.db.run(
+        `INSERT INTO profile (
+           name, visa_email, visa_password_enc, visa_process_id, email_destination,
+           whatsapp_destination, actions, enabled, contact_phone, intake_status,
+           created_at, updated_at
+         ) VALUES (?, NULL, '', NULL, '', '', '', 0, ?, 'pending', ?, ?)`,
+        [trimmed, contactPhone, now, now],
+      );
+      id = result.lastID!;
+    } catch (error) {
+      throw this.translateConstraintError(error);
+    }
+    return (await this.getProfile(id))!;
+  }
+
+  /**
+   * Record a successful prompt. The first prompt time stays put so earlier
+   * replies are still visible. Resend restarts the 24-hour window.
+   */
+  async markIntakePromptSent(id: number, nowMs: number): Promise<void> {
+    await this.db.run(
+      `UPDATE profile SET
+         intake_status = 'pending',
+         intake_prompt_ms = COALESCE(intake_prompt_ms, ?),
+         intake_window_started_ms = ?,
+         intake_last_poll_ms = NULL,
+         intake_error = NULL,
+         updated_at = ?
+       WHERE id = ?`,
+      [nowMs, nowMs, new Date().toISOString(), id],
+    );
+  }
+
+  async setIntakeError(id: number, error: string): Promise<void> {
+    await this.db.run(
+      "UPDATE profile SET intake_error = ?, updated_at = ? WHERE id = ?",
+      [error, new Date().toISOString(), id],
+    );
+  }
+
+  async setIntakeLastPoll(id: number, nowMs: number): Promise<void> {
+    await this.db.run(
+      "UPDATE profile SET intake_last_poll_ms = ? WHERE id = ? AND intake_status = 'pending'",
+      [nowMs, id],
+    );
+  }
+
+  async listPendingIntakes(): Promise<Profile[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM profile WHERE intake_status = 'pending' ORDER BY id",
+    );
+    return rows.map((row) => this.toProfile(row));
+  }
+
+  async intakeSkipMessageIds(id: number): Promise<Set<string>> {
+    const row = await this.db.get<{ intake_skip_message_ids: string }>(
+      "SELECT intake_skip_message_ids FROM profile WHERE id = ?",
+      [id],
+    );
+    return new Set(parseSkipMessageIds(row?.intake_skip_message_ids));
+  }
+
+  /** Remember a template reply that was answered, and show the problem on the row. */
+  async rememberIntakeReply(
+    id: number,
+    messageId: string,
+    error: string,
+  ): Promise<void> {
+    const ids = [...(await this.intakeSkipMessageIds(id))];
+    if (!ids.includes(messageId)) ids.push(messageId);
+    await this.db.run(
+      `UPDATE profile SET intake_skip_message_ids = ?, intake_error = ?, updated_at = ?
+       WHERE id = ? AND intake_status = 'pending'`,
+      [JSON.stringify(ids.slice(-200)), error, new Date().toISOString(), id],
+    );
+  }
+
+  async completeIntake(id: number, rawInput: ProfileInput): Promise<Profile> {
+    const existing = await this.getProfile(id);
+    if (!existing) throw new ValidationError("Profile not found");
+    if (existing.intakeStatus !== "pending") {
+      throw new ValidationError("Profile is no longer waiting for WhatsApp");
+    }
+    const input = this.validateProfile(rawInput, true);
+    const password = this.box.encrypt(
+      input.visaPassword!,
+      profileSecretContext(id),
+    );
+    let changes = 0;
+    try {
+      const result = await this.db.run(
+        `UPDATE profile SET
+           visa_email = ?, visa_password_enc = ?, visa_process_id = ?,
+           email_destination = ?, whatsapp_destination = ?, min_date = ?, max_date = ?,
+           actions = ?, enabled = 0, intake_status = 'ready', intake_error = NULL,
+           intake_confirmed = 0, updated_at = ?
+         WHERE id = ? AND intake_status = 'pending'`,
+        [
+          input.visaEmail,
+          password,
+          input.visaProcessId,
+          input.emailDestination,
+          input.whatsappDestination,
+          input.minDate,
+          input.maxDate,
+          input.actions.join(","),
+          new Date().toISOString(),
+          id,
+        ],
+      );
+      changes = result.changes ?? 0;
+    } catch (error) {
+      throw this.translateConstraintError(error);
+    }
+    if (!changes) {
+      throw new ValidationError("Profile is no longer waiting for WhatsApp");
+    }
+    return (await this.getProfile(id))!;
+  }
+
+  /**
+   * Ready profiles that were filled from WhatsApp and are still disabled.
+   * The contact phone has not yet been told that an admin must enable them.
+   */
+  async listProfilesAwaitingEnableNotice(): Promise<Profile[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM profile
+       WHERE intake_confirmed = 0
+         AND intake_status = 'ready'
+         AND enabled = 0
+         AND contact_phone != ''
+       ORDER BY id`,
+    );
+    return rows.map((row) => this.toProfile(row));
+  }
+
+  async markIntakeConfirmed(id: number): Promise<void> {
+    await this.db.run(
+      "UPDATE profile SET intake_confirmed = 1, updated_at = ? WHERE id = ?",
+      [new Date().toISOString(), id],
+    );
+  }
+
+  /** Stop watching. Returns false when the row was already finished or expired. */
+  async expireIntake(id: number, error: string): Promise<boolean> {
+    const result = await this.db.run(
+      `UPDATE profile SET intake_status = 'expired', intake_error = ?, updated_at = ?
+       WHERE id = ? AND intake_status = 'pending'`,
+      [error, new Date().toISOString(), id],
+    );
+    return (result.changes ?? 0) === 1;
+  }
+
   /**
    * Updates fields. Enabling is left to the caller via setProfileEnabled after
-   * an AIS probe when turning a profile on.
+   * an AIS probe when turning a profile on. Saving the full form finishes an
+   * intake that was still waiting.
    */
   async updateProfile(id: number, rawInput: ProfileInput): Promise<Profile> {
     const existing = await this.getProfile(id);
     if (!existing) {
       throw new ValidationError("Profile not found");
     }
-    const input = this.validateProfile(rawInput, false);
+    const input = this.validateProfile(
+      rawInput,
+      existing.intakeStatus !== "ready" || !existing.hasPassword,
+    );
     // Keep current enabled flag here; enable transitions go through probe.
     const enabled = existing.enabled && input.enabled;
     if (enabled) {
@@ -793,10 +1134,14 @@ export class Store {
       });
     }
 
+    const queueEnableNotice =
+      existing.intakeStatus !== "ready" && !enabled && !!existing.contactPhone;
     try {
       await this.db.run(
         `UPDATE profile SET name = ?, visa_email = ?, visa_process_id = ?, email_destination = ?,
            whatsapp_destination = ?, min_date = ?, max_date = ?, actions = ?, enabled = ?,
+           intake_status = 'ready', intake_error = NULL,
+           intake_confirmed = CASE WHEN ? = 1 THEN 0 ELSE intake_confirmed END,
            updated_at = ?
          WHERE id = ?`,
         [
@@ -809,6 +1154,7 @@ export class Store {
           input.maxDate,
           input.actions.join(","),
           enabled ? 1 : 0,
+          queueEnableNotice ? 1 : 0,
           new Date().toISOString(),
           id,
         ],
@@ -830,11 +1176,18 @@ export class Store {
     if (enabled) {
       const profile = await this.getProfile(id);
       if (!profile) throw new ValidationError("Profile not found");
+      if (profile.intakeStatus !== "ready" || !profile.visaProcessId || !profile.hasPassword) {
+        throw new ValidationError(
+          "This profile is still waiting for visa account details",
+        );
+      }
       await this.assertCanEnable(profile);
     }
     await this.db.run(
-      "UPDATE profile SET enabled = ?, updated_at = ? WHERE id = ?",
-      [enabled ? 1 : 0, new Date().toISOString(), id],
+      `UPDATE profile SET enabled = ?, updated_at = ?,
+         intake_confirmed = CASE WHEN ? = 1 THEN 1 ELSE intake_confirmed END
+       WHERE id = ?`,
+      [enabled ? 1 : 0, new Date().toISOString(), enabled ? 1 : 0, id],
     );
   }
 
@@ -1326,7 +1679,10 @@ export class Store {
 
   private toNotification(row: any): NotificationRecord {
     const kind: NotificationKind =
-      row.kind === "heartbeat" || row.kind === "failure" || row.kind === "test"
+      row.kind === "heartbeat" ||
+      row.kind === "failure" ||
+      row.kind === "test" ||
+      row.kind === "intake"
         ? row.kind
         : "appointment";
     return {

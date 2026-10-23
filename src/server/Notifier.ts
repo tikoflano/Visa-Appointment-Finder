@@ -9,6 +9,7 @@ import {
 } from "../services/NotificationService";
 import { Action } from "../types";
 import { parseDateAsUtc } from "../utils/dateUtils";
+import { intakeExpiredAdminText } from "./intakeReply";
 import {
   isFailureRun,
   NotificationInput,
@@ -20,6 +21,7 @@ import {
 } from "./Store";
 import {
   configuredOpenwaBaseUrl,
+  displayWhatsAppId,
   openwaConfigured,
   parseWhatsAppChatIds,
   WhatsAppService,
@@ -63,6 +65,13 @@ function recipientsList(to: string, bcc?: string): string {
   const primary = to.trim();
   const copy = (bcc || "").trim();
   return copy ? `${primary}; bcc ${copy}` : primary;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function uniqueIds(...groups: string[][]): string[] {
@@ -288,7 +297,7 @@ export class Notifier {
 
     if (emailTo) {
       const content = composeTestNotification({
-        processId: profile.visaProcessId,
+        processId: profile.visaProcessId || "",
       });
       if (!settings.emailEnabled) {
         channels.push({
@@ -321,7 +330,7 @@ export class Notifier {
           if (!mailer) throw new Error("Gmail credentials are not configured");
           const sent = await mailer.notify.sendTestNotification({
             destination: emailTo,
-            processId: profile.visaProcessId,
+            processId: profile.visaProcessId || "",
           });
           await this.logNotification({
             kind: "test",
@@ -361,7 +370,7 @@ export class Notifier {
 
     if (chats.length) {
       const content = composeTestNotification({
-        processId: profile.visaProcessId,
+        processId: profile.visaProcessId || "",
       });
       const recipients = chats.join(", ");
       if (!settings.whatsappEnabled) {
@@ -478,7 +487,7 @@ export class Notifier {
 
     const dates = result.dates.map((iso) => parseDateAsUtc(iso));
     const content = composeAppointmentNotification({
-      processId: profile.visaProcessId,
+      processId: profile.visaProcessId || "",
       dates,
     });
     const datesKey = appointmentDatesKey(result.dates);
@@ -704,6 +713,71 @@ export class Notifier {
     }
   }
 
+  /**
+   * Tell admin destinations that a WhatsApp intake stopped after 24 hours.
+   * The contact phone is notified separately and is not gated by the channel switches.
+   */
+  async notifyIntakeExpired(profile: Profile): Promise<void> {
+    const settings = await this.store.getSettings();
+    const phone = displayWhatsAppId(profile.contactPhone);
+    const text = intakeExpiredAdminText(profile.name, phone);
+    const subject = `WhatsApp intake stopped for ${profile.name}`;
+    const emailReady = settings.emailEnabled && this.emailReady(settings);
+    const whatsappReady =
+      settings.whatsappEnabled && this.whatsappReady(settings);
+    const adminEmail = settings.emailEnabled
+      ? settings.emailAdminDestination.trim()
+      : "";
+    const adminWhatsapp = settings.whatsappEnabled
+      ? parseWhatsAppChatIds(settings.whatsappAdminDestination)
+      : [];
+
+    if (emailReady && adminEmail) {
+      try {
+        const email = new EmailService({
+          user: settings.gmailUser,
+          pass: await this.store.getGmailAppPassword(),
+        });
+        const html = `<p>${escapeHtml(text)}</p>`;
+        await email.sendMail(adminEmail, subject, html, text);
+        await this.logNotification({
+          kind: "intake",
+          channel: "email",
+          status: "sent",
+          profileId: profile.id,
+          recipients: adminEmail,
+          subject,
+          summary: text,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.logNotification({
+          kind: "intake",
+          channel: "email",
+          status: "failed",
+          profileId: profile.id,
+          recipients: adminEmail,
+          subject,
+          summary: text,
+          error: message,
+        });
+      }
+    }
+
+    if (whatsappReady && adminWhatsapp.length) {
+      await this.sendWhatsApp({
+        kind: "intake",
+        profileId: profile.id,
+        recipients: adminWhatsapp.join(", "),
+        subject,
+        summary: text,
+        text,
+        settings,
+        chats: adminWhatsapp,
+      });
+    }
+  }
+
   private tick(): void {
     void this.maybeHeartbeat();
   }
@@ -762,7 +836,7 @@ export class Notifier {
     const content = composeFailureAlarm({
       profileName: profile.name,
       visaEmail: profile.visaEmail,
-      visaProcessId: profile.visaProcessId,
+      visaProcessId: profile.visaProcessId || "",
       threshold,
       errors: errors.map((run) => ({
         startedAt: run.startedAt,
@@ -779,7 +853,7 @@ export class Notifier {
           destination: adminEmail,
           profileName: profile.name,
           visaEmail: profile.visaEmail,
-          visaProcessId: profile.visaProcessId,
+          visaProcessId: profile.visaProcessId || "",
           threshold,
           errors: errors.map((run) => ({
             startedAt: run.startedAt,
@@ -883,7 +957,7 @@ export class Notifier {
       await mailer.notify.sendAppointmentNotification({
         to,
         bcc,
-        processId: profile.visaProcessId,
+        processId: profile.visaProcessId || "",
         dates,
       });
       await this.logNotification({

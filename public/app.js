@@ -110,7 +110,11 @@ function nextRunLabel(iso) {
 }
 
 function sortedProfiles() {
+  const rank = (profile) =>
+    profile.intakeStatus === "pending" ? 0 : profile.intakeStatus === "expired" ? 1 : 2;
   return [...profiles].sort((left, right) => {
+    const byRank = rank(left) - rank(right);
+    if (byRank) return byRank;
     const leftAt = left.nextRunAt ? Date.parse(left.nextRunAt) : Number.POSITIVE_INFINITY;
     const rightAt = right.nextRunAt ? Date.parse(right.nextRunAt) : Number.POSITIVE_INFINITY;
     if (leftAt !== rightAt) return leftAt - rightAt;
@@ -118,9 +122,36 @@ function sortedProfiles() {
   });
 }
 
+function intakeOpen(profile) {
+  return profile?.intakeStatus === "pending" || profile?.intakeStatus === "expired";
+}
+
+function displayPhone(id) {
+  return String(id || "").replace(/@c\.us$/i, "");
+}
+
+function intakePhaseLabel(profile) {
+  if (profile.intakeStatus === "expired") return "Intake stopped";
+  if (profile.intakeStatus !== "pending") return "";
+  if (!profile.intakeWindowStartedMs) return "WhatsApp prompt not sent";
+  const age = Date.now() - Number(profile.intakeWindowStartedMs);
+  const cadence =
+    age < 10 * 60 * 1000
+      ? "checking every minute"
+      : age < 70 * 60 * 1000
+        ? "checking every 5 minutes"
+        : "checking hourly";
+  const until = profile.intakeExpiresAt
+    ? ` until ${formatTimestamp(profile.intakeExpiresAt)}`
+    : "";
+  return `Waiting for WhatsApp · ${cadence}${until}`;
+}
+
 function visibleProfiles() {
   const list = sortedProfiles();
-  return hideDisabled ? list.filter((profile) => profile.enabled) : list;
+  return hideDisabled
+    ? list.filter((profile) => profile.enabled || intakeOpen(profile))
+    : list;
 }
 
 function liveBookedDate(label, stored) {
@@ -163,6 +194,7 @@ function rescheduleLimitCell(profile) {
 }
 
 function dateWindow(profile) {
+  if (intakeOpen(profile)) return el("span", { class: "hint" }, "—");
   const stored = !!profile.currentAppointmentDate;
   const booked = stored ? formatDate(profile.currentAppointmentDate) : "booked";
   if (!profile.minDate && !profile.maxDate) {
@@ -236,10 +268,12 @@ function setError(form, message) {
   alert.open = !!message;
 }
 
-function toast(message, variant = "danger") {
-  const node = el("sl-alert", { variant, closable: true, duration: 4000 }, message);
+function toast(message, variant = "danger", duration = 4000) {
+  const node = el("sl-alert", { variant, closable: true }, message);
+  node.duration = duration;
   document.body.append(node);
   node.toast();
+  return node;
 }
 
 function confirmAction(message, { okLabel = "Continue", variant = "primary" } = {}) {
@@ -377,7 +411,8 @@ async function refresh() {
     );
     const wantsWhatsapp = profileList.some(
       (profile) =>
-        profile.actions?.includes("notify") && profile.whatsappDestination,
+        profile.intakeStatus === "pending" ||
+        (profile.actions?.includes("notify") && profile.whatsappDestination),
     );
     const partialOpenwa = !!(
       settings.openwaSessionId || settings.whatsappAdminDestination
@@ -480,22 +515,27 @@ function isProbing(profile) {
 
 function enableSwitch(profile) {
   const probing = isProbing(profile);
+  const waiting = intakeOpen(profile);
   const toggle = document.createElement("sl-switch");
   toggle.size = "small";
   toggle.checked = !!profile.enabled;
-  toggle.disabled = probing;
-  toggle.title = probing
-    ? "Checking AIS…"
-    : profile.enabled
-      ? "Disable"
-      : "Enable";
+  toggle.disabled = probing || waiting;
+  toggle.title = waiting
+    ? "Waiting for visa account details"
+    : probing
+      ? "Checking AIS…"
+      : profile.enabled
+        ? "Disable"
+        : "Enable";
   toggle.setAttribute(
     "aria-label",
     probing
       ? "Checking AIS"
-      : profile.enabled
-        ? "Disable profile"
-        : "Enable profile",
+      : waiting
+        ? "Waiting for visa account details"
+        : profile.enabled
+          ? "Disable profile"
+          : "Enable profile",
   );
   toggle.addEventListener("sl-change", (event) => {
     toggleEnabled(profile, event.target.checked);
@@ -509,25 +549,43 @@ function renderProfiles() {
   tbody.replaceChildren(
     ...visible.map((profile) => {
       const busy = profile.state !== "idle";
+      const waiting = intakeOpen(profile);
       const nextLabel = nextRunLabel(profile.nextRunAt);
+      const rowClass =
+        profile.intakeStatus === "pending"
+          ? "intake"
+          : profile.intakeStatus === "expired"
+            ? "intake stopped"
+            : profile.enabled
+              ? ""
+              : "disabled";
 
       return el(
         "tr",
-        { class: profile.enabled ? "" : "disabled" },
+        { class: rowClass },
         el("td", { class: "col-enabled" }, enableSwitch(profile)),
         el(
           "td",
           {},
           el("strong", {}, profile.name),
-          el("div", { class: "sub" }, profile.visaEmail),
           el(
             "div",
             { class: "sub" },
-            isProbing(profile)
-              ? "Checking AIS…"
-              : formatVisaFingerprint(profile.visaFingerprint) ||
-                  el("span", { class: "hint" }, "visas unknown"),
+            waiting ? displayPhone(profile.contactPhone) : profile.visaEmail,
           ),
+          el(
+            "div",
+            { class: "sub" },
+            waiting
+              ? intakePhaseLabel(profile)
+              : isProbing(profile)
+                ? "Checking AIS…"
+                : formatVisaFingerprint(profile.visaFingerprint) ||
+                    el("span", { class: "hint" }, "visas unknown"),
+          ),
+          waiting && profile.intakeError
+            ? el("div", { class: "sub hint" }, profile.intakeError)
+            : null,
         ),
         el(
           "td",
@@ -545,7 +603,7 @@ function renderProfiles() {
         el(
           "td",
           {},
-          profile.actions.length
+          !waiting && profile.actions.length
             ? profile.actions.map((action) => actionBadge(action, profile))
             : badge("none", "muted"),
         ),
@@ -571,9 +629,16 @@ function renderProfiles() {
           el(
             "div",
             { class: "row-actions" },
-            busy
-              ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action stop")
-              : iconAction("play-circle", "Run now", () => runNow(profile), "row-action play"),
+            waiting
+              ? iconAction(
+                  "arrow-clockwise",
+                  "Resend WhatsApp",
+                  () => resendIntake(profile),
+                  "row-action",
+                )
+              : busy
+                ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action stop")
+                : iconAction("play-circle", "Run now", () => runNow(profile), "row-action play"),
             iconAction("clock-history", "Runs", () => openRuns(profile), "row-action history"),
             iconAction("pencil", "Edit", () => openProfile(profile), "row-action edit"),
             iconAction("trash", "Delete", () => deleteProfile(profile), "row-action danger"),
@@ -624,6 +689,16 @@ async function cancelRun(profile) {
   refresh();
 }
 
+async function resendIntake(profile) {
+  try {
+    await api("POST", `/api/profiles/${profile.id}/intake/resend`, {});
+    toast("WhatsApp sent", "success");
+  } catch (error) {
+    toast(error.message);
+  }
+  refresh();
+}
+
 async function deleteProfile(profile) {
   if (
     !(await confirmAction(`Delete profile "${profile.name}"? Its stored password will be removed.`, {
@@ -650,6 +725,48 @@ function actionCheckboxes(form) {
 const profileDialog = $("#profile-dialog");
 const profileForm = $("#profile-form");
 let editingProfile = null;
+let profileMode = "ask";
+
+function setProfileMode(mode) {
+  profileMode = mode;
+  const ask = mode === "ask";
+  named(profileForm, "name").classList.toggle("wide", !ask);
+  $("#profile-manual").hidden = ask;
+  const phone = $("#profile-phone");
+  phone.hidden = !ask;
+  phone.disabled = !ask;
+  phone.required = ask;
+  for (const input of $("#profile-manual").querySelectorAll("sl-input, sl-checkbox")) {
+    input.disabled = ask;
+    if (input.name === "visaEmail" || input.name === "visaProcessId") {
+      input.required = !ask;
+    }
+  }
+  $("#profile-show-manual").hidden = !ask;
+  $("#profile-send-whatsapp").hidden = !ask;
+  $("#profile-save").hidden = ask;
+  $("#profile-show-ask").hidden = ask || !!editingProfile;
+  $("#profile-send-whatsapp").type = ask ? "submit" : "button";
+  $("#profile-save").type = ask ? "button" : "submit";
+  const password = named(profileForm, "visaPassword");
+  password.required = !ask && !editingProfile?.hasPassword;
+  password.placeholder =
+    !ask && editingProfile?.hasPassword
+      ? "Leave empty to keep the stored password"
+      : "";
+
+  const hint = $("#profile-intake-hint");
+  if (editingProfile && intakeOpen(editingProfile)) {
+    const phase = intakePhaseLabel(editingProfile);
+    hint.hidden = false;
+    hint.textContent = editingProfile.intakeError
+      ? `${phase}. ${editingProfile.intakeError} You can also fill this form and save.`
+      : `${phase}. You can also fill this form and save.`;
+  } else {
+    hint.hidden = true;
+    hint.textContent = "";
+  }
+}
 
 function openProfile(profile) {
   editingProfile = profile || null;
@@ -676,16 +793,17 @@ function openProfile(profile) {
     checkbox.checked = values.actions.includes(checkbox.value);
   }
   named(profileForm, "enabled").checked = !!values.enabled;
-
-  const password = named(profileForm, "visaPassword");
-  password.required = !profile;
-  password.placeholder = profile ? "Leave empty to keep the stored password" : "";
+  named(profileForm, "contactPhone").value = displayPhone(values.contactPhone);
 
   const testTip = $("#test-profile-notification-tip");
-  testTip.hidden = !profile;
+  testTip.hidden = !profile || intakeOpen(profile);
+  setProfileMode(profile ? "manual" : "ask");
 
   profileDialog.show();
 }
+
+$("#profile-show-manual").addEventListener("click", () => setProfileMode("manual"));
+$("#profile-show-ask").addEventListener("click", () => setProfileMode("ask"));
 
 $("#new-profile").addEventListener("click", () => openProfile(null));
 
@@ -693,6 +811,40 @@ profileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setError(profileForm);
   const form = profileForm;
+  if (profileMode === "ask") {
+    const sendButton = $("#profile-send-whatsapp");
+    if (sendButton.loading) return;
+    const name = named(form, "name").value.trim();
+    sendButton.loading = true;
+    sendButton.disabled = true;
+    sendButton.textContent = "Sending…";
+    const notice = toast(
+      name ? `Sending message to ${name}` : "Sending WhatsApp message",
+      "primary",
+      Infinity,
+    );
+    try {
+      const created = await api("POST", "/api/profiles/intake", {
+        name: named(form, "name").value,
+        phone: named(form, "contactPhone").value,
+      });
+      notice.hide();
+      profileDialog.hide();
+      toast(
+        created.intakeError || (name ? `Message sent to ${name}` : "WhatsApp sent"),
+        created.intakeError ? "danger" : "success",
+      );
+      refresh();
+    } catch (error) {
+      notice.hide();
+      setError(profileForm, error.message);
+    } finally {
+      sendButton.loading = false;
+      sendButton.disabled = false;
+      sendButton.textContent = "Send WhatsApp";
+    }
+    return;
+  }
   const actions = actionCheckboxes(form)
     .filter((checkbox) => checkbox.checked)
     .map((checkbox) => checkbox.value);
@@ -1601,6 +1753,7 @@ function notificationKindBadge(kind) {
   if (kind === "heartbeat") return badge("heartbeat", "info");
   if (kind === "failure") return badge("failure", "bad");
   if (kind === "test") return badge("test", "muted");
+  if (kind === "intake") return badge("intake", "warn");
   return badge("appointment", "warn");
 }
 

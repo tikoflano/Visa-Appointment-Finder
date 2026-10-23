@@ -32,6 +32,12 @@ export interface OpenwaLinkResult {
   qrCode: string | null;
 }
 
+export interface OpenwaIncomingMessage {
+  id: string;
+  body: string;
+  timestamp: number | null;
+}
+
 export function parseWhatsAppChatIds(value: unknown): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -48,6 +54,26 @@ export function parseWhatsAppChatIds(value: unknown): string[] {
 
 export function parseWhatsAppDestinations(value: unknown): string {
   return parseWhatsAppChatIds(value).join(",");
+}
+
+/** One direct-chat number for a profile intake. Groups and lists are refused. */
+export function parseIntakePhone(value: unknown): string {
+  const parts = String(value ?? "")
+    .split(/[\n,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length !== 1) {
+    throw new Error("Enter one phone number");
+  }
+  const id = normalizeChatId(parts[0]);
+  if (!/^[\d]+@c\.us$/i.test(id)) {
+    throw new Error("Enter one phone number");
+  }
+  return id;
+}
+
+export function displayWhatsAppId(id: string): string {
+  return id.replace(/@c\.us$/i, "");
 }
 
 function normalizeChatId(token: string): string {
@@ -140,6 +166,42 @@ export class OpenwaClient {
         START_TIMEOUT_MS,
       ),
     );
+  }
+
+  /**
+   * Messages in one chat since `sinceMs`. Outgoing rows are included: a reply
+   * sent from the same account the gateway is linked to is stored as outgoing.
+   */
+  async listChatMessages(
+    sessionId: string,
+    chatId: string,
+    sinceMs: number,
+  ): Promise<OpenwaIncomingMessage[]> {
+    const collected: OpenwaIncomingMessage[] = [];
+    let after = "";
+    for (let page = 0; page < 5; page++) {
+      const params = new URLSearchParams({
+        chatId,
+        since: String(sinceMs),
+        orderBy: "timestamp",
+        inlineMedia: "false",
+        limit: "100",
+      });
+      if (after) params.set("after", after);
+      const data = await this.requestJson(
+        "GET",
+        `${sessionPath(sessionId)}/messages?${params}`,
+      );
+      const rows = messageRows(data);
+      const batch = rows.map(toIncomingMessage).filter(Boolean) as OpenwaIncomingMessage[];
+      collected.push(...batch);
+      if (batch.length < 100) break;
+      after = batch[batch.length - 1].id;
+    }
+    collected.sort(
+      (left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0),
+    );
+    return collected;
   }
 
   async getQr(id: string): Promise<{ qrCode: string | null; status?: string }> {
@@ -272,6 +334,29 @@ async function snapshotSession(
 
 function sessionPath(id: string): string {
   return `/api/sessions/${encodeURIComponent(id)}`;
+}
+
+function messageRows(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray((data as { messages?: unknown }).messages)) {
+    return (data as { messages: unknown[] }).messages;
+  }
+  return [];
+}
+
+function toIncomingMessage(raw: unknown): OpenwaIncomingMessage | null {
+  const row = (raw || {}) as Record<string, unknown>;
+  const id = String(row.id ?? "").trim();
+  if (!id) return null;
+  const timestamp =
+    typeof row.timestamp === "number" && Number.isFinite(row.timestamp)
+      ? row.timestamp
+      : null;
+  return {
+    id,
+    body: row.body == null ? "" : String(row.body),
+    timestamp,
+  };
 }
 
 function toSession(raw: unknown): OpenwaSession {

@@ -193,8 +193,23 @@ h1 {
   margin-right: auto;
 }
 
-#test-profile-notification-tip[hidden] {
+#test-profile-notification-tip[hidden],
+#profile-manual[hidden],
+#profile-phone[hidden],
+#profile-intake-hint[hidden],
+#profile-show-ask[hidden],
+#profile-show-manual[hidden],
+#profile-send-whatsapp[hidden],
+#profile-save[hidden] {
   display: none;
+}
+
+tr.intake {
+  background: #fff8e8;
+}
+
+tr.intake.stopped {
+  background: #f4f6f8;
 }
 
 .row-actions {

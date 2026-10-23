@@ -316,6 +316,9 @@ export class Scheduler {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
 
+    if (!profile.visaEmail || !profile.visaProcessId) {
+      throw new Error("Profile is missing visa account details");
+    }
     return {
       ...env,
       VISA_USER_EMAIL: profile.visaEmail,
