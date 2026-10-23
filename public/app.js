@@ -130,21 +130,55 @@ function displayPhone(id) {
   return String(id || "").replace(/@c\.us$/i, "");
 }
 
-function intakePhaseLabel(profile) {
-  if (profile.intakeStatus === "expired") return "Intake stopped";
-  if (profile.intakeStatus !== "pending") return "";
-  if (!profile.intakeWindowStartedMs) return "WhatsApp prompt not sent";
+function intakePhaseLines(profile) {
+  if (profile.intakeStatus === "expired") return ["Intake stopped"];
+  if (profile.intakeStatus !== "pending") return [];
+  if (!profile.intakeWindowStartedMs) return ["WhatsApp prompt not sent"];
   const age = Date.now() - Number(profile.intakeWindowStartedMs);
   const cadence =
     age < 10 * 60 * 1000
-      ? "checking every minute"
+      ? "Checking every minute"
       : age < 70 * 60 * 1000
-        ? "checking every 5 minutes"
-        : "checking hourly";
-  const until = profile.intakeExpiresAt
-    ? ` until ${formatTimestamp(profile.intakeExpiresAt)}`
-    : "";
-  return `Waiting for WhatsApp · ${cadence}${until}`;
+        ? "Checking every 5 minutes"
+        : "Checking hourly";
+  const top = ["Waiting for WhatsApp"];
+  if (profile.intakeExpiresAt) {
+    top.push(`until ${formatTimestamp(profile.intakeExpiresAt)}`);
+  }
+  const bottom = [cadence];
+  if (profile.intakeNextPollAt) {
+    const next = nextRunLabel(profile.intakeNextPollAt);
+    bottom.push(next === "due" ? "next check due" : `next check ${next}`);
+  }
+  if (profile.intakeLastPollMs) {
+    bottom.push(
+      `last check ${relativeTime(new Date(Number(profile.intakeLastPollMs)).toISOString())}`,
+    );
+  }
+  return [top.join(" · "), bottom.join(" · ")];
+}
+
+function intakePhaseLabel(profile) {
+  return intakePhaseLines(profile).join("\n");
+}
+
+function intakePhaseTitle(profile) {
+  if (profile.intakeStatus !== "pending" || !profile.intakeWindowStartedMs) {
+    return "";
+  }
+  const lines = [];
+  if (profile.intakeNextPollAt) {
+    lines.push(`Next check: ${formatTimestamp(profile.intakeNextPollAt)}`);
+  }
+  if (profile.intakeLastPollMs) {
+    lines.push(
+      `Last check: ${formatTimestamp(new Date(Number(profile.intakeLastPollMs)).toISOString())}`,
+    );
+  }
+  if (profile.intakeExpiresAt) {
+    lines.push(`Watch ends: ${formatTimestamp(profile.intakeExpiresAt)}`);
+  }
+  return lines.join("\n");
 }
 
 function visibleProfiles() {
@@ -573,16 +607,20 @@ function renderProfiles() {
             { class: "sub" },
             waiting ? displayPhone(profile.contactPhone) : profile.visaEmail,
           ),
-          el(
-            "div",
-            { class: "sub" },
-            waiting
-              ? intakePhaseLabel(profile)
-              : isProbing(profile)
-                ? "Checking AIS…"
-                : formatVisaFingerprint(profile.visaFingerprint) ||
-                    el("span", { class: "hint" }, "visas unknown"),
-          ),
+          ...(waiting
+            ? intakePhaseLines(profile).map((line) =>
+                el("div", { class: "sub", title: intakePhaseTitle(profile) }, line),
+              )
+            : [
+                el(
+                  "div",
+                  { class: "sub" },
+                  isProbing(profile)
+                    ? "Checking AIS…"
+                    : formatVisaFingerprint(profile.visaFingerprint) ||
+                        el("span", { class: "hint" }, "visas unknown"),
+                ),
+              ]),
           waiting && profile.intakeError
             ? el("div", { class: "sub hint" }, profile.intakeError)
             : null,

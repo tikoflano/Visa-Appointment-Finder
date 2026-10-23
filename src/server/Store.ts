@@ -11,7 +11,7 @@ import {
 } from "../botResult";
 import { Action } from "../types";
 import { SecretBox } from "./SecretBox";
-import { INTAKE_WINDOW_MS } from "./intakeSchedule";
+import { INTAKE_WINDOW_MS, nextIntakePollAt } from "./intakeSchedule";
 import {
   configuredOpenwaBaseUrl,
   parseIntakePhone,
@@ -54,6 +54,8 @@ export interface Profile
   /** Start of the current 24-hour watch. Resend moves this forward. */
   intakeWindowStartedMs: number | null;
   intakeLastPollMs: number | null;
+  /** ISO time of the next scheduled WhatsApp intake check, when pending. */
+  intakeNextPollAt: string | null;
   intakeExpiresAt: string | null;
   currentAppointmentDate: string | null;
   /** Canonical AIS visa-class multiset, e.g. "H1B1x1,H4x4". */
@@ -721,6 +723,14 @@ export class Store {
         ? row.intake_status
         : "ready";
     const intakeWindowStartedMs = epochMs(row.intake_window_started_ms);
+    const intakeLastPollMs = epochMs(row.intake_last_poll_ms);
+    const nextPollMs =
+      intakeStatus === "pending" && intakeWindowStartedMs != null
+        ? nextIntakePollAt(
+            intakeWindowStartedMs,
+            intakeLastPollMs ?? intakeWindowStartedMs,
+          )
+        : null;
     return {
       id: row.id,
       name: row.name,
@@ -737,7 +747,9 @@ export class Store {
       intakeError: row.intake_error ?? null,
       intakePromptMs: epochMs(row.intake_prompt_ms),
       intakeWindowStartedMs,
-      intakeLastPollMs: epochMs(row.intake_last_poll_ms),
+      intakeLastPollMs,
+      intakeNextPollAt:
+        nextPollMs == null ? null : new Date(nextPollMs).toISOString(),
       intakeExpiresAt:
         intakeWindowStartedMs == null
           ? null
