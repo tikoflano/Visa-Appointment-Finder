@@ -46,8 +46,8 @@ export function intakePromptText(): string {
     "> *login_email*: email used to login to AIS",
     "> *login_password*: password to login to AIS",
     "> *process_id*: Log in to AIS, click the green Continue button for your current process, then copy the number from the address bar. Example: https://ais.usvisa-info.com/en-cl/niv/schedule/71289258/continue_actions — the process id is 71289258",
-    "> *from*: earliest date to search, inclusive, YYYY-MM-DD",
-    "> *to*: latest date to search, inclusive, YYYY-MM-DD. Leave empty, or omit this line, to use the current appointment date",
+    "> *from*: earliest date to search, inclusive, YYYY-MM-DD or YYYY/MM/DD",
+    "> *to*: latest date to search, inclusive, YYYY-MM-DD or YYYY/MM/DD. Leave empty, or omit this line, to use the current appointment date",
     "> *notification_emails*: comma-separated list (CSV) of emails to notify. Example: ada@example.com, bob@example.com. Leave empty for no email notifications. The login email is not included unless you write it here",
     "> *notification_phones*: comma-separated list (CSV) of WhatsApp numbers to notify. Example: 56911111111, 56922222222. Leave empty for no WhatsApp notifications. This chat's number is not included unless you write it here",
   ].join("\n");
@@ -77,7 +77,7 @@ export function parseIntakeReply(text: string): IntakeReplyResult {
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split("\n");
   const values = readTemplate(lines);
   if (!values) {
-    if (lines[0]?.trim() === "VISA-PROFILE") {
+    if (lines.some((line) => line.trim() === "VISA-PROFILE")) {
       return {
         kind: "invalid",
         problems: [
@@ -92,8 +92,23 @@ export function parseIntakeReply(text: string): IntakeReplyResult {
   const visaEmail = values.login_email.trim();
   const visaPassword = values.login_password;
   const visaProcessId = values.process_id.trim();
-  const minDate = values.from.trim();
-  const maxDate = values.to.trim();
+  const rawMinDate = values.from.trim();
+  const rawMaxDate = values.to.trim();
+  const minDate = normalizeDate(rawMinDate);
+  const maxDate = normalizeDate(rawMaxDate);
+
+  // Our own prompt (or an unfilled copy) is not a reply.
+  if (
+    !visaEmail &&
+    !visaPassword &&
+    !visaProcessId &&
+    !rawMinDate &&
+    !rawMaxDate &&
+    !values.notification_emails.trim() &&
+    !values.notification_phones.trim()
+  ) {
+    return { kind: "ignore" };
+  }
 
   if (!visaEmail) problems.push("Visa account email is required");
   else if (!EMAIL.test(visaEmail)) problems.push("Visa account email is invalid");
@@ -101,11 +116,15 @@ export function parseIntakeReply(text: string): IntakeReplyResult {
   if (!/^\d+$/.test(visaProcessId)) {
     problems.push("Visa process ID must be numeric");
   }
-  if (!isIsoDate(minDate)) problems.push("Earliest date must be YYYY-MM-DD");
-  if (maxDate && !isIsoDate(maxDate)) {
-    problems.push("Latest date must be YYYY-MM-DD, or empty to use the current appointment");
+  if (!minDate) {
+    problems.push("Earliest date must be YYYY-MM-DD or YYYY/MM/DD");
   }
-  if (isIsoDate(minDate) && isIsoDate(maxDate) && minDate > maxDate) {
+  if (rawMaxDate && !maxDate) {
+    problems.push(
+      "Latest date must be YYYY-MM-DD or YYYY/MM/DD, or empty to use the current appointment",
+    );
+  }
+  if (minDate && maxDate && minDate > maxDate) {
     problems.push("Earliest date must be on or before latest date");
   }
 
@@ -148,9 +167,14 @@ export function parseIntakeReply(text: string): IntakeReplyResult {
   };
 }
 
+/**
+ * Find the VISA-PROFILE block even when the user pasted the whole prompt
+ * (intro text above and field help below).
+ */
 function readTemplate(lines: string[]): Record<string, string> | null {
-  if (!lines.length || lines[0].trim() !== "VISA-PROFILE") return null;
-  let index = 1;
+  const start = lines.findIndex((line) => line.trim() === "VISA-PROFILE");
+  if (start < 0) return null;
+  let index = start + 1;
   const values: Record<string, string> = {};
 
   for (const key of KEYS_BEFORE_TO) {
@@ -175,7 +199,6 @@ function readTemplate(lines: string[]): Record<string, string> | null {
     index++;
   }
 
-  if (index !== lines.length) return null;
   return values;
 }
 
@@ -188,13 +211,19 @@ function readKeyLine(line: string | undefined, key: string): string | null {
   return key === "login_password" ? value : value.trim();
 }
 
-function isIsoDate(value: string): boolean {
-  if (!ISO_DATE.test(value)) return false;
-  const [year, month, day] = value.split("-").map(Number);
+/** Accept YYYY-MM-DD or YYYY/MM/DD; store as YYYY-MM-DD. Empty stays empty. */
+function normalizeDate(value: string): string {
+  if (!value) return "";
+  const normalized = value.includes("/") ? value.replace(/\//g, "-") : value;
+  if (!ISO_DATE.test(normalized)) return "";
+  const [year, month, day] = normalized.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  );
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return "";
+  }
+  return normalized;
 }

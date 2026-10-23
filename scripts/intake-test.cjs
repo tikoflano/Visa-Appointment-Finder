@@ -132,6 +132,13 @@ function testParser() {
   assert(omittedTo.kind === "ok", "a missing to line uses the current appointment");
   assert(omittedTo.fields.maxDate === "", "omitted to is stored as no latest date");
 
+  const slashDates = parseIntakeReply(
+    reply({ from: "2026/11/01", to: "2026/12/31" }),
+  );
+  assert(slashDates.kind === "ok", "YYYY/MM/DD dates are accepted");
+  assert(slashDates.fields.minDate === "2026-11-01", "from slash date is stored with dashes");
+  assert(slashDates.fields.maxDate === "2026-12-31", "to slash date is stored with dashes");
+
   const badTo = parseIntakeReply(reply({ to: "November" }));
   assert(badTo.kind === "invalid", "a non-date to is invalid");
   assert(
@@ -159,13 +166,45 @@ function testParser() {
 
   assert(parseIntakeReply("hello").kind === "ignore", "chat is ignored");
   assert(
-    parseIntakeReply(`${reply()}\nextra`).kind === "invalid",
-    "extra lines on a VISA-PROFILE block get a correction",
+    parseIntakeReply(`Please fill this in.\n\n${reply()}`).kind === "ok",
+    "text above the VISA-PROFILE block is fine",
+  );
+  assert(
+    parseIntakeReply(
+      `${reply()}\n\nHow to fill each field:\n> *login_email*: email used to login to AIS`,
+    ).kind === "ok",
+    "pasting the field help under the block is fine",
+  );
+  assert(
+    parseIntakeReply(
+      `Reply with this block only.\n\n${reply()}\n\nHow to fill each field:\n> *from*: earliest date`,
+    ).kind === "ok",
+    "pasting the whole prompt with a filled block is fine",
+  );
+  assert(
+    parseIntakeReply(
+      `Reply with this block only.\n\n${reply({
+        login_email: "",
+        login_password: "",
+        process_id: "",
+        from: "",
+        to: "",
+        notification_emails: "",
+        notification_phones: "",
+      })}\n\nHow to fill each field:`,
+    ).kind === "ignore",
+    "an unfilled template copy is ignored",
+  );
+  assert(
+    parseIntakeReply(
+      "VISA-PROFILE\nlogin_email: ada@example.com\nnot-a-field: x\n",
+    ).kind === "invalid",
+    "wrong key on a VISA-PROFILE block gets a correction",
   );
   assert(
     parseIntakeReply(reply().replace("login_email:", "Login_email:")).kind ===
       "invalid",
-    "wrong key on a VISA-PROFILE block gets a correction",
+    "wrong casing on a field name gets a correction",
   );
 }
 
