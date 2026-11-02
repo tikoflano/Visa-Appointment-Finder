@@ -170,6 +170,10 @@ docker_base=(
   -e HOST=0.0.0.0
   -e PORT=3000
   -e "COOKIE_SECURE=${COOKIE_SECURE:-}"
+  # Reap orphaned Chromium children. Without an init, Node-as-PID-1 leaves
+  # thousands of zombie chrome processes and eventually hits the PID cgroup
+  # limit (browserType.launch / zygote failures).
+  --init
   --shm-size=1g
   -p "$HOST_BIND:$PORT:3000"
 )
@@ -262,6 +266,7 @@ if [ "${1:-}" = "dev" ]; then
     -e "VITE_DEV_PORT=$vite_port"
     -e VITE_LISTEN_HOST=0.0.0.0
     -e VITE_HMR_HOST=127.0.0.1
+    --init
     --shm-size=1g
     -p "$HOST_BIND:$vite_port:$vite_port"
   )
