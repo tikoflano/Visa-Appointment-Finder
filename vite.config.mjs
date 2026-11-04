@@ -43,6 +43,7 @@ function shoelaceAssetsPlugin() {
 export default defineConfig({
   root: "public",
   publicDir: false,
+  appType: "spa",
   plugins: [shoelaceAssetsPlugin()],
   build: {
     outDir: path.join(rootDir, "build/ui"),

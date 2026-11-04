@@ -61,7 +61,7 @@ Visa account passwords and the Gmail app password are encrypted with **AES-256-G
 
 The UI never sends stored passwords back to the browser. Leave a password field blank to keep the current one.
 
-The admin login password is **hashed with scrypt**. It cannot be recovered — only replaced (`./run.sh set-password` or the first-run setup screen).
+The admin login password is **hashed with scrypt**. It cannot be recovered — only replaced (`./run.sh set-password` or the first-run setup screen at `/admin`). Portal users sign in at `/`; admin setup and admin sign-in are only at `/admin` (not linked from the public login page).
 
 To print settings and decrypted passwords (needs the master key and `npm run build`):
 
@@ -77,7 +77,7 @@ To print settings and decrypted passwords (needs the master key and `npm run bui
 ./run.sh
 ```
 
-The first run creates `secrets/master.key` if it is missing, builds the `visa` image, starts a detached container (`visa-ui`), and starts the OpenWA sidecar on the `visa` Docker network (see WhatsApp below). Open http://127.0.0.1:3000 and create an admin password. You can close the terminal; the UI and scheduled checks keep running. Later starts rebuild the image only when source files changed (see [When the Docker image is rebuilt](#when-the-docker-image-is-rebuilt)). If the image did not change and the container is already up, `./run.sh` prints the URL and exits.
+The first run creates `secrets/master.key` if it is missing, builds the `visa` image, starts a detached container (`visa-ui`), and starts the OpenWA sidecar on the `visa` Docker network (see WhatsApp below). Open http://127.0.0.1:3000/admin and create an admin password (or run `./run.sh set-password` first). You can close the terminal; the UI and scheduled checks keep running. Later starts rebuild the image only when source files changed (see [When the Docker image is rebuilt](#when-the-docker-image-is-rebuilt)). If the image did not change and the container is already up, `./run.sh` prints the URL and exits.
 
 `./run.sh dump` and `./run.sh set-password` run on the host with Node; they do not use Docker.
 
@@ -87,7 +87,7 @@ The UI is published on localhost only. To reach it from another machine:
 HOST_BIND=0.0.0.0 ./run.sh
 ```
 
-If you terminate TLS in front of it, set `COOKIE_SECURE=true`.
+If you terminate TLS in front of it, set `COOKIE_SECURE=true`. For a public Cloudflare Tunnel, follow [Public exposure (Cloudflare)](#public-exposure-cloudflare).
 
 ### Locally (without Docker)
 
@@ -127,6 +127,8 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 
 `./run.sh --env` is gone. The old per-account cron workflow is not supported.
 
+Optional [`.env`](.env.example) in the project root is loaded by `./run.sh` (copy `.env.example` → `.env`). Variables already set in the shell are not overwritten. `.env` is gitignored.
+
 Environment variables `run.sh` honors when starting the container:
 
 | Variable | Default | Purpose |
@@ -135,6 +137,10 @@ Environment variables `run.sh` honors when starting the container:
 | `PORT` | `3000` | Host port mapped to production `visa-ui`’s 3000 |
 | `COOKIE_SECURE` | unset | Set `true` if you terminate TLS in front of the UI |
 | `PUBLIC_BASE_URL` | unset | Origin used in portal invite links when Settings has no Public base URL |
+| `ADMIN_IP_ALLOWLIST` | unset | Comma-separated IPs/CIDRs allowed for `/admin` and admin APIs (loopback always allowed). Required for public Tunnel deploys |
+| `TURNSTILE_SITE_KEY` | unset | Cloudflare Turnstile site key (login/setup/register) |
+| `TURNSTILE_SECRET_KEY` | unset | Cloudflare Turnstile secret (server verify). When set, bot check is required |
+| `TURNSTILE_REQUIRED` | unset | Set `true` to require Turnstile even without keys configured (fail closed) |
 | `OPENWA` | `1` | Set `0` to start `visa-ui` without the OpenWA sidecar or the `visa` network |
 
 Examples:
@@ -147,8 +153,24 @@ Examples:
 ./run.sh logs
 HOST_BIND=0.0.0.0 PORT=8080 ./run.sh
 COOKIE_SECURE=true HOST_BIND=0.0.0.0 ./run.sh
+COOKIE_SECURE=true PUBLIC_BASE_URL=https://visa.example.com ADMIN_IP_ALLOWLIST=203.0.113.10 TURNSTILE_SITE_KEY=... TURNSTILE_SECRET_KEY=... ./run.sh
 ./run.sh stop
 ```
+
+## Public exposure (Cloudflare)
+
+The app is localhost-first. A public Cloudflare Tunnel hostname is fine if you harden the edge and set the env vars above. Use **free** Cloudflare features only:
+
+1. **Before publishing the hostname**, set an admin password (`./run.sh set-password` or complete setup at `/admin` on loopback).
+2. Proxied Tunnel DNS, SSL **Full (strict)**, **Always Use HTTPS**.
+3. Run with `COOKIE_SECURE=true`, `PUBLIC_BASE_URL=https://your-hostname`, `ADMIN_IP_ALLOWLIST` (your home/office IPs), and Turnstile site + secret keys.
+4. Enable **Bot Fight Mode** and the Free Managed WAF ruleset.
+5. **Zone Lockdown** (or a Free custom WAF / IP Access rule) for `/admin`, `/admin/*`, `/api/login`, `/api/setup`, and other admin API paths to the same allowlisted IPs. Leave `/`, `/api/user/*`, `/api/session`, and static assets public for the portal.
+6. Spend the single Free **rate limiting** rule on portal auth paths (`/api/user/login`, `/api/user/register`) with Managed Challenge.
+7. Optional: Cloudflare Access email OTP on `/admin*` if your IP changes often and you cannot update the allowlist quickly.
+8. Do not run `VISA_DEV` on a Tunnel-reachable container.
+
+Portal login stays at `/`. Admin login stays at `/admin`. The in-app allowlist returns 404 to non-allowlisted clients for admin surfaces even if edge rules misconfigure.
 
 ## When the Docker image is rebuilt
 
@@ -238,7 +260,7 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 
 ## User portal
 
-End users do not create profiles. After a profile has a visa account email (manual create or WhatsApp intake), the server can send a **portal invite** (email and/or WhatsApp) with a link to set a portal password. Login uses that **AIS visa email** plus the portal password.
+End users do not create profiles. After a profile has a visa account email (manual create or WhatsApp intake), the server can send a **portal invite** (email and/or WhatsApp) with a link to set a portal password. Login is at `/` with that **AIS visa email** plus the portal password. Admin sign-in is only at `/admin`.
 
 Users can:
 
@@ -278,8 +300,12 @@ Admin extras on each profile row: **Send/resend portal invite**, **Impersonate**
 | `API_PORT` | `3456` | `./run.sh dev` API port that Vite proxies to |
 | `VITE_DEV_PORT` | `5173` | Host port published from the `visa-dev` Vite UI (open this in the browser) |
 | `HOST_BIND` | `127.0.0.1` | Address Docker publishes on the host |
-| `COOKIE_SECURE` | unset | Set `true` behind HTTPS |
+| `COOKIE_SECURE` | unset | Set `true` behind HTTPS (also forces Secure cookies when `x-forwarded-proto` / CF says HTTPS) |
 | `PUBLIC_BASE_URL` | unset | Absolute origin for portal invite links (no trailing slash). Settings **Public base URL** overrides when set |
+| `ADMIN_IP_ALLOWLIST` | unset | Comma-separated IPs/CIDRs for `/admin` + admin APIs |
+| `TURNSTILE_SITE_KEY` | unset | Turnstile site key exposed to the login UI |
+| `TURNSTILE_SECRET_KEY` | unset | Turnstile secret for server-side siteverify |
+| `TURNSTILE_REQUIRED` | unset | Force Turnstile requirement when keys are missing |
 
 ## Local npm scripts
 

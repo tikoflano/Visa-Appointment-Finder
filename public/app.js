@@ -42,6 +42,84 @@ let loginMode = "user";
 let sessionRole = null;
 let impersonating = false;
 let registerToken = "";
+let turnstileSiteKey = null;
+let turnstileRequiredFlag = false;
+let turnstileScriptPromise = null;
+const turnstileWidgets = new Map();
+
+function isAdminPath() {
+  return (
+    location.pathname === "/admin" || location.pathname.startsWith("/admin/")
+  );
+}
+
+function loadTurnstileScript() {
+  if (window.turnstile) return Promise.resolve();
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load bot check"));
+    document.head.appendChild(script);
+  });
+  return turnstileScriptPromise;
+}
+
+async function mountTurnstile(containerId) {
+  const container = $(`#${containerId}`);
+  if (!container) return;
+  if (!turnstileSiteKey) {
+    container.hidden = true;
+    container.innerHTML = "";
+    turnstileWidgets.delete(containerId);
+    return;
+  }
+  container.hidden = false;
+  await loadTurnstileScript();
+  if (turnstileWidgets.has(containerId)) {
+    try {
+      window.turnstile.reset(turnstileWidgets.get(containerId));
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  container.innerHTML = "";
+  const widgetId = window.turnstile.render(container, {
+    sitekey: turnstileSiteKey,
+    theme: "light",
+  });
+  turnstileWidgets.set(containerId, widgetId);
+}
+
+function readTurnstileToken(containerId) {
+  const widgetId = turnstileWidgets.get(containerId);
+  if (!turnstileSiteKey) {
+    if (turnstileRequiredFlag) {
+      throw new Error("Bot check is required but not configured");
+    }
+    return undefined;
+  }
+  if (widgetId == null || !window.turnstile) {
+    throw new Error("Bot check required");
+  }
+  const token = window.turnstile.getResponse(widgetId);
+  if (!token) throw new Error("Complete the bot check");
+  return token;
+}
+
+function resetTurnstile(containerId) {
+  const widgetId = turnstileWidgets.get(containerId);
+  if (widgetId != null && window.turnstile) {
+    try {
+      window.turnstile.reset(widgetId);
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 async function api(method, url, body) {
   const response = await fetch(url, {
@@ -389,41 +467,54 @@ function parseHashRoute() {
 async function boot() {
   const route = parseHashRoute();
   if (route.name === "register" && route.token) {
+    if (isAdminPath()) {
+      location.replace(`/${location.search}${location.hash}`);
+      return;
+    }
     await showRegister(route.token);
     return;
   }
   const session = await api("GET", "/api/session");
+  turnstileSiteKey = session.turnstileSiteKey || null;
+  turnstileRequiredFlag = !!session.turnstileRequired;
   if (session.authenticated) {
     await applySession(session);
-  } else {
-    showLogin(session.setupRequired);
+    return;
   }
+  if (session.setupRequired && !isAdminPath()) {
+    location.replace(`/admin${location.search}`);
+    return;
+  }
+  await showLogin(session.setupRequired);
 }
 
 async function applySession(session) {
   sessionRole = session.role;
   impersonating = !!session.impersonating;
+  turnstileSiteKey = session.turnstileSiteKey || turnstileSiteKey;
+  turnstileRequiredFlag = !!session.turnstileRequired;
+  const adminPath = isAdminPath();
   if (session.role === "user" || session.impersonating) {
+    if (adminPath) {
+      location.replace("/");
+      return;
+    }
     showUserPortal(session);
   } else {
+    if (!adminPath) history.replaceState(null, "", "/admin");
     showApp(session.dev);
   }
 }
 
-function setLoginMode(mode) {
-  loginMode = mode;
-  const userBtn = $("#login-mode-user");
-  const adminBtn = $("#login-mode-admin");
-  userBtn.variant = mode === "user" ? "primary" : "default";
-  adminBtn.variant = mode === "admin" ? "primary" : "default";
+function applyLoginMode() {
   const email = $("#login-email");
-  email.hidden = mode !== "user";
-  email.required = mode === "user";
+  email.hidden = loginMode !== "user";
+  email.required = loginMode === "user";
   named($("#login-form"), "password").label =
-    mode === "admin" ? "Admin password" : "Portal password";
+    loginMode === "admin" ? "Admin password" : "Portal password";
 }
 
-function showLogin(setupRequired) {
+async function showLogin(setupRequired) {
   clearInterval(refreshTimer);
   $("#app-view").hidden = true;
   $("#user-view").hidden = true;
@@ -432,22 +523,20 @@ function showLogin(setupRequired) {
   $("#login-view").hidden = false;
   document.body.classList.add("is-login");
   document.body.classList.remove("is-app");
-  setupMode = !!setupRequired;
+  const adminPath = isAdminPath();
+  setupMode = !!setupRequired && adminPath;
+  loginMode = adminPath ? "admin" : "user";
   $("#setup-hint").hidden = !setupMode;
   $("#confirm-row").hidden = !setupMode;
-  $("#login-mode-row").hidden = !!setupMode;
   $(".login-title").textContent = setupMode ? "Create password" : "Sign in";
   $("#login-submit").textContent = setupMode ? "Create password" : "Sign in";
   const form = $("#login-form");
-  named(form, "password").autocomplete = setupMode ? "new-password" : "current-password";
+  named(form, "password").autocomplete = setupMode
+    ? "new-password"
+    : "current-password";
   named(form, "confirm").required = setupMode;
-  if (setupMode) {
-    setLoginMode("admin");
-    $("#login-email").hidden = true;
-    $("#login-email").required = false;
-  } else {
-    setLoginMode(loginMode);
-  }
+  applyLoginMode();
+  await mountTurnstile("login-turnstile");
 }
 
 function hideAuthViews() {
@@ -524,39 +613,49 @@ async function showRegister(token) {
   document.body.classList.remove("is-app");
   setError($("#register-form"));
   try {
+    const session = await api("GET", "/api/session");
+    turnstileSiteKey = session.turnstileSiteKey || null;
+    turnstileRequiredFlag = !!session.turnstileRequired;
     const info = await api("GET", `/api/user/invite?token=${encodeURIComponent(token)}`);
     $("#register-identity").textContent = `${info.name} · ${info.visaEmail}`;
+    await mountTurnstile("register-turnstile");
   } catch (error) {
     $("#register-identity").textContent = "";
     setError($("#register-form"), error.message);
   }
 }
 
-$("#login-mode-user").addEventListener("click", () => setLoginMode("user"));
-$("#login-mode-admin").addEventListener("click", () => setLoginMode("admin"));
-
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   setError(form);
   try {
+    const turnstileToken = readTurnstileToken("login-turnstile");
     if (setupMode) {
       if (named(form, "password").value !== named(form, "confirm").value) {
         throw new Error("Passwords do not match");
       }
-      await api("POST", "/api/setup", { password: named(form, "password").value });
+      await api("POST", "/api/setup", {
+        password: named(form, "password").value,
+        turnstileToken,
+      });
     } else if (loginMode === "admin") {
-      await api("POST", "/api/login", { password: named(form, "password").value });
+      await api("POST", "/api/login", {
+        password: named(form, "password").value,
+        turnstileToken,
+      });
     } else {
       await api("POST", "/api/user/login", {
         email: named(form, "email").value,
         password: named(form, "password").value,
+        turnstileToken,
       });
     }
     form.reset();
     const session = await api("GET", "/api/session");
     await applySession(session);
   } catch (error) {
+    resetTurnstile("login-turnstile");
     setError(form, error.message);
   }
 });
@@ -572,20 +671,30 @@ $("#register-form").addEventListener("submit", async (event) => {
     await api("POST", "/api/user/register", {
       token: registerToken,
       password: named(form, "password").value,
+      turnstileToken: readTurnstileToken("register-turnstile"),
     });
     location.hash = "";
     const session = await api("GET", "/api/session");
     await applySession(session);
   } catch (error) {
+    resetTurnstile("register-turnstile");
     setError(form, error.message);
   }
 });
 
 $("#logout").addEventListener("click", async () => {
+  const adminLogout = sessionRole === "admin" && !impersonating;
   await api("POST", "/api/logout", {});
   sessionRole = null;
   impersonating = false;
-  showLogin(false);
+  if (adminLogout) {
+    if (!isAdminPath()) location.assign("/admin");
+    else await showLogin(false);
+  } else if (isAdminPath()) {
+    location.assign("/");
+  } else {
+    await showLogin(false);
+  }
 });
 
 $("#stop-impersonation").addEventListener("click", async () => {

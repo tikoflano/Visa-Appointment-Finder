@@ -13,10 +13,49 @@ OPENWA_CONTAINER=openwa
 OPENWA_COMPOSE="$BASE_DIR/compose.openwa.yml"
 NETWORK=visa
 CONTAINER_HOST=/host
-PORT="${PORT:-3000}"
-HOST_BIND="${HOST_BIND:-127.0.0.1}"
 HASH_LABEL=visa.source_hash
 IMAGE_REBUILT=0
+
+# Load .env before defaults so HOST_BIND / COOKIE_SECURE / Turnstile / etc. apply.
+# Existing shell exports win over .env (do not clobber).
+load_dotenv() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+    if [[ "$line" != *=* ]]; then
+      echo "Ignoring invalid .env line: $line" >&2
+      continue
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      echo "Ignoring invalid .env key: $key" >&2
+      continue
+    }
+    if [[ "$value" =~ ^\".*\"$ ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" =~ ^\'.*\'$ ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    if [ -z "${!key+x}" ]; then
+      export "$key=$value"
+    fi
+  done < "$file"
+}
+
+load_dotenv "$BASE_DIR/.env"
+
+PORT="${PORT:-3000}"
+HOST_BIND="${HOST_BIND:-127.0.0.1}"
 OPENWA="${OPENWA:-1}"
 
 usage() {
@@ -43,7 +82,9 @@ Commands:
   generate-key             Show/create secrets/master.key and secrets/openwa.api-key
   -h, --help               Show this help
 
-./run.sh --env is gone. The old per-account cron workflow is not supported.
+Optional .env in this directory sets HOST_BIND, COOKIE_SECURE, PUBLIC_BASE_URL,
+ADMIN_IP_ALLOWLIST, TURNSTILE_* , and other run.sh variables. Shell exports win.
+Copy .env.example to .env and edit. .env is gitignored.
 EOF
 }
 
@@ -170,6 +211,11 @@ docker_base=(
   -e HOST=0.0.0.0
   -e PORT=3000
   -e "COOKIE_SECURE=${COOKIE_SECURE:-}"
+  -e "PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}"
+  -e "ADMIN_IP_ALLOWLIST=${ADMIN_IP_ALLOWLIST:-}"
+  -e "TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}"
+  -e "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}"
+  -e "TURNSTILE_REQUIRED=${TURNSTILE_REQUIRED:-}"
   # Reap orphaned Chromium children. Without an init, Node-as-PID-1 leaves
   # thousands of zombie chrome processes and eventually hits the PID cgroup
   # limit (browserType.launch / zygote failures).

@@ -941,10 +941,8 @@ pre[data-output] {
   font-size: 12px;
 }
 
-.login-mode-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+.turnstile {
+  min-height: 65px;
 }
 
 .user-portal {

@@ -2,6 +2,19 @@ import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import {
+  assertSameOrigin,
+  clientIp,
+  ipAllowed,
+  LoginLockout,
+  parseIpAllowlist,
+  requestIsHttps,
+  securityHeaders,
+  sessionCookie,
+  turnstileRequired,
+  turnstileSiteKey,
+  verifyTurnstileToken,
+} from "./httpSecurity";
 import { IntakeMonitor } from "./IntakeMonitor";
 import { Notifier } from "./Notifier";
 import { Scheduler } from "./Scheduler";
@@ -19,11 +32,10 @@ const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 100 * 1024;
-const LOGIN_LOCKOUT_THRESHOLD = 10;
-const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 const DEV =
   process.env.VISA_DEV === "1" || process.env.VISA_DEV === "true";
 const VITE_ORIGIN = `http://127.0.0.1:${process.env.VITE_DEV_PORT || "5173"}`;
+const ADMIN_IP_ALLOWLIST = parseIpAllowlist(process.env.ADMIN_IP_ALLOWLIST);
 
 const PUBLIC_DIR = path.resolve(
   process.env.PUBLIC_DIR || path.join(__dirname, "..", "ui"),
@@ -157,12 +169,6 @@ interface Route {
   access?: "admin" | "user";
 }
 
-function sessionCookie(token: string, maxAgeSeconds: number): string {
-  return `sid=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}${
-    process.env.COOKIE_SECURE === "true" ? "; Secure" : ""
-  }`;
-}
-
 function parseIsoQuery(value: string | null, name: string): string | undefined {
   const raw = value?.trim();
   if (!raw) return undefined;
@@ -267,21 +273,25 @@ function send(
   status: number,
   body: string | Buffer,
   contentType: string,
+  https = false,
 ) {
-  res.writeHead(status, {
-    "Content-Type": contentType,
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy":
-      "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'",
-  });
+  res.writeHead(status, securityHeaders({ contentType, https }));
   res.end(body);
 }
 
-const sendJson = (res: http.ServerResponse, status: number, data: unknown) =>
-  send(res, status, JSON.stringify(data), "application/json; charset=utf-8");
+const sendJson = (
+  res: http.ServerResponse,
+  status: number,
+  data: unknown,
+  https = false,
+) =>
+  send(
+    res,
+    status,
+    JSON.stringify(data),
+    "application/json; charset=utf-8",
+    https,
+  );
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -294,8 +304,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const scheduler = new Scheduler(store, notifier);
   const intake = new IntakeMonitor(store, notifier);
   const sessions = new Sessions();
-  const failedLogins: number[] = [];
-  const failedUserLogins: number[] = [];
+  const adminLoginLockout = new LoginLockout();
+  const userLoginLockout = new LoginLockout();
+  let lastAdminLockoutNotifyAt = 0;
 
   const profileId = (params: string[]) => Number(params[0]);
 
@@ -306,14 +317,29 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   };
 
   const clientMeta = (req: http.IncomingMessage) => ({
-    ip:
-      (req.headers["x-forwarded-for"] as string | undefined)
-        ?.split(",")[0]
-        ?.trim() ||
-      req.socket.remoteAddress ||
-      null,
+    ip: clientIp(req) || null,
     userAgent: req.headers["user-agent"] || null,
   });
+
+  const assertAdminIpAllowed = (req: http.IncomingMessage) => {
+    if (!ADMIN_IP_ALLOWLIST.length) return;
+    if (!ipAllowed(clientIp(req), ADMIN_IP_ALLOWLIST)) {
+      throw new HttpError(404, "Not found");
+    }
+  };
+
+  const maybeNotifyAdminLockout = (ip: string) => {
+    const now = Date.now();
+    if (now - lastAdminLockoutNotifyAt < 15 * 60 * 1000) return;
+    lastAdminLockoutNotifyAt = now;
+    void notifier
+      .notifySecurityAlert(
+        `Admin login locked out after too many failed attempts (ip ${ip || "unknown"}).`,
+      )
+      .catch((error) => {
+        console.error("Admin lockout notification failed:", error);
+      });
+  };
 
   const audit = async (
     input: Parameters<Store["recordPortalAudit"]>[0],
@@ -423,6 +449,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         dev: true,
         impersonating: false,
         portalAccessEnabled: true,
+        turnstileSiteKey: turnstileSiteKey(),
+        turnstileRequired: false,
       };
     }
     if (!session) {
@@ -432,6 +460,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         setupRequired,
         dev: DEV,
         impersonating: false,
+        turnstileSiteKey: turnstileSiteKey(),
+        turnstileRequired: turnstileRequired(),
       };
     }
     const userId = effectiveUserProfileId(session);
@@ -451,6 +481,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           setupRequired,
           dev: DEV,
           impersonating: false,
+          turnstileSiteKey: turnstileSiteKey(),
+          turnstileRequired: turnstileRequired(),
         };
       }
     }
@@ -468,6 +500,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       visaEmail,
       impersonating: !!session.impersonating,
       portalAccessEnabled,
+      turnstileSiteKey: turnstileSiteKey(),
+      turnstileRequired: turnstileRequired(),
     };
   };
 
@@ -519,15 +553,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "POST",
       pattern: /^\/api\/setup$/,
       public: true,
-      handler: async ({ res, body }) => {
+      handler: async ({ req, res, body }) => {
+        assertAdminIpAllowed(req);
         if (await store.hasAdminPassword()) {
           throw new HttpError(409, "Admin password already set");
         }
+        await verifyTurnstileToken(body.turnstileToken, clientIp(req));
         await store.setAdminPassword(String(body.password ?? ""));
         const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
-          sessionCookie(token, SESSION_TTL_MS / 1000),
+          sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
         );
         return { ok: true };
       },
@@ -536,25 +572,25 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "POST",
       pattern: /^\/api\/login$/,
       public: true,
-      handler: async ({ res, body }) => {
-        const cutoff = Date.now() - LOGIN_LOCKOUT_MS;
-        while (failedLogins.length && failedLogins[0] < cutoff) {
-          failedLogins.shift();
-        }
-        if (failedLogins.length >= LOGIN_LOCKOUT_THRESHOLD) {
+      handler: async ({ req, res, body }) => {
+        assertAdminIpAllowed(req);
+        const ip = clientIp(req);
+        if (adminLoginLockout.isLocked(ip)) {
           throw new HttpError(429, "Too many failed attempts, try later");
         }
-
+        await verifyTurnstileToken(body.turnstileToken, ip);
         if (!(await store.verifyAdminPassword(String(body.password ?? "")))) {
-          failedLogins.push(Date.now());
+          if (adminLoginLockout.recordFailure(ip)) {
+            maybeNotifyAdminLockout(ip);
+          }
           await sleep(1000);
           throw new HttpError(401, "Wrong password");
         }
-
+        adminLoginLockout.clear(ip);
         const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
-          sessionCookie(token, SESSION_TTL_MS / 1000),
+          sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
         );
         return { ok: true };
       },
@@ -564,26 +600,25 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       pattern: /^\/api\/user\/login$/,
       public: true,
       handler: async ({ req, res, body }) => {
-        const cutoff = Date.now() - LOGIN_LOCKOUT_MS;
-        while (failedUserLogins.length && failedUserLogins[0] < cutoff) {
-          failedUserLogins.shift();
-        }
-        if (failedUserLogins.length >= LOGIN_LOCKOUT_THRESHOLD) {
+        const ip = clientIp(req);
+        const email = String(body.email ?? "").trim().toLowerCase();
+        if (userLoginLockout.isLocked(ip, email)) {
           throw new HttpError(429, "Too many failed attempts, try later");
         }
-        const email = String(body.email ?? "").trim();
+        await verifyTurnstileToken(body.turnstileToken, ip);
         try {
           const profile = await store.verifyPortalLogin(
             email,
             String(body.password ?? ""),
           );
+          userLoginLockout.clear(ip, email);
           const token = sessions.create({
             role: "user",
             profileId: profile.id,
           });
           res.setHeader(
             "Set-Cookie",
-            sessionCookie(token, SESSION_TTL_MS / 1000),
+            sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
           );
           await audit(
             {
@@ -596,7 +631,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           );
           return { ok: true };
         } catch (error) {
-          const message =
+          const auditReason =
             error instanceof ValidationError
               ? error.message
               : "Wrong email or password";
@@ -608,13 +643,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
               profileId: profile?.id ?? null,
               actor: "user",
               action: "login_failure",
-              detail: { email: email || null, reason: message },
+              detail: { email: email || null, reason: auditReason },
             },
             req,
           );
-          failedUserLogins.push(Date.now());
+          userLoginLockout.recordFailure(ip, email);
           await sleep(1000);
-          throw new HttpError(401, message);
+          throw new HttpError(401, "Wrong email or password");
         }
       },
     },
@@ -625,6 +660,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       handler: async ({ req, res, body }) => {
         const token = String(body.token ?? "").trim();
         const password = String(body.password ?? "");
+        await verifyTurnstileToken(body.turnstileToken, clientIp(req));
         try {
           const profile = await store.registerPortalUser(token, password);
           const sid = sessions.create({
@@ -633,7 +669,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           });
           res.setHeader(
             "Set-Cookie",
-            sessionCookie(sid, SESSION_TTL_MS / 1000),
+            sessionCookie(sid, SESSION_TTL_MS / 1000, requestIsHttps(req)),
           );
           await audit(
             {
@@ -700,7 +736,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           );
         }
         sessions.destroy(sid);
-        res.setHeader("Set-Cookie", sessionCookie("", 0));
+        res.setHeader(
+          "Set-Cookie",
+          sessionCookie("", 0, requestIsHttps(req)),
+        );
         return { ok: true };
       },
     },
@@ -901,7 +940,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           });
           res.setHeader(
             "Set-Cookie",
-            sessionCookie(token, SESSION_TTL_MS / 1000),
+            sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
           );
         }
         await audit(
@@ -1352,6 +1391,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    const https = requestIsHttps(req);
 
     try {
       // Raw files in public/ need Vite to resolve CSS/JS imports. Send the
@@ -1364,6 +1404,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         return;
       }
 
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/admin" || url.pathname.startsWith("/admin/"))
+      ) {
+        assertAdminIpAllowed(req);
+      }
+
       const staticFile =
         req.method === "GET" &&
         !url.pathname.startsWith("/api/") &&
@@ -1374,6 +1421,23 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           200,
           await fs.promises.readFile(staticFile.abs),
           staticFile.type,
+          https,
+        );
+      }
+
+      // SPA shell for client routes (admin login lives at /admin).
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/admin" || url.pathname.startsWith("/admin/"))
+      ) {
+        const index = resolvePublicFile("/index.html");
+        if (!index) throw new HttpError(404, "Not found");
+        return send(
+          res,
+          200,
+          await fs.promises.readFile(index.abs),
+          index.type,
+          https,
         );
       }
 
@@ -1398,6 +1462,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         }
         const access = route.access ?? "admin";
         if (access === "admin") {
+          assertAdminIpAllowed(req);
           if (session.role !== "admin" || session.impersonating) {
             throw new HttpError(403, "Admin access required");
           }
@@ -1416,6 +1481,24 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         if (!req.headers["content-type"]?.startsWith("application/json")) {
           throw new HttpError(415, "Expected application/json");
         }
+        const settings = await store.getSettings();
+        try {
+          assertSameOrigin(req, {
+            publicBaseUrl: settings.publicBaseUrl || undefined,
+            extraHosts: DEV
+              ? [`127.0.0.1:${process.env.VITE_DEV_PORT || "5173"}`, `localhost:${process.env.VITE_DEV_PORT || "5173"}`]
+              : [],
+          });
+        } catch (error) {
+          const status =
+            error &&
+            typeof error === "object" &&
+            "statusCode" in error &&
+            typeof (error as { statusCode: unknown }).statusCode === "number"
+              ? (error as { statusCode: number }).statusCode
+              : 403;
+          throw new HttpError(status, "Invalid origin");
+        }
         body = await readJson(req);
       }
 
@@ -1430,15 +1513,33 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           url,
           session,
         }),
+        https,
       );
     } catch (error) {
-      if (error instanceof HttpError) {
-        sendJson(res, error.status, { error: error.message });
+      if (
+        error &&
+        typeof error === "object" &&
+        "statusCode" in error &&
+        typeof (error as { statusCode: unknown }).statusCode === "number"
+      ) {
+        const status = (error as { statusCode: number; message?: string })
+          .statusCode;
+        sendJson(
+          res,
+          status,
+          {
+            error:
+              (error as { message?: string }).message || "Request rejected",
+          },
+          https,
+        );
+      } else if (error instanceof HttpError) {
+        sendJson(res, error.status, { error: error.message }, https);
       } else if (error instanceof ValidationError) {
-        sendJson(res, 400, { error: error.message });
+        sendJson(res, 400, { error: error.message }, https);
       } else {
         console.error(`${req.method} ${url.pathname} failed:`, error);
-        sendJson(res, 500, { error: "Internal server error" });
+        sendJson(res, 500, { error: "Internal server error" }, https);
       }
     }
   });
@@ -1465,7 +1566,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   });
   if (!(await store.hasAdminPassword())) {
     console.warn(
-      "No admin password set. Open the UI to create one, or run: node build/server/cli.js set-password",
+      "No admin password set. Open /admin to create one, or run: node build/server/cli.js set-password",
     );
   }
 

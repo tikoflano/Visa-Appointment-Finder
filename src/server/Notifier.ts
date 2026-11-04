@@ -114,6 +114,76 @@ export class Notifier {
   }
 
   /**
+   * Best-effort admin alert for security events (login lockout, etc.).
+   * Uses configured admin email/WhatsApp; silent when neither is ready.
+   */
+  async notifySecurityAlert(message: string): Promise<void> {
+    const settings = await this.store.getSettings();
+    const emailReady = settings.emailEnabled && this.emailReady(settings);
+    const whatsappReady =
+      settings.whatsappEnabled && this.whatsappReady(settings);
+    const adminEmail = settings.emailEnabled
+      ? settings.emailAdminDestination.trim()
+      : "";
+    const adminWhatsapp = settings.whatsappEnabled
+      ? parseWhatsAppChatIds(settings.whatsappAdminDestination)
+      : [];
+    if (
+      (!emailReady || !adminEmail) &&
+      (!whatsappReady || !adminWhatsapp.length)
+    ) {
+      console.warn(`Security alert (not delivered): ${message}`);
+      return;
+    }
+
+    const subject = "Visa UI security alert";
+    const text = message;
+    const html = `<p>${escapeHtml(message)}</p>`;
+
+    if (emailReady && adminEmail) {
+      try {
+        const email = new EmailService({
+          user: settings.gmailUser,
+          pass: await this.store.getGmailAppPassword(),
+        });
+        await email.sendMail(adminEmail, subject, html, text);
+        await this.logNotification({
+          kind: "test",
+          channel: "email",
+          status: "sent",
+          recipients: adminEmail,
+          subject,
+          summary: message,
+        });
+      } catch (error) {
+        const err = error instanceof Error ? error.message : String(error);
+        console.error("Security alert email failed:", err);
+        await this.logNotification({
+          kind: "test",
+          channel: "email",
+          status: "failed",
+          recipients: adminEmail,
+          subject,
+          summary: message,
+          error: err,
+        });
+      }
+    }
+
+    if (whatsappReady && adminWhatsapp.length) {
+      await this.sendWhatsApp({
+        kind: "test",
+        recipients: adminWhatsapp.join(", "),
+        subject,
+        summary: message,
+        text: `*${subject}*\n${text}`,
+        settings,
+        chats: adminWhatsapp,
+      });
+    }
+  }
+
+  /**
    * Send a labeled test to admin email or WhatsApp. Form values override
    * stored settings for this request only and are not saved.
    */
