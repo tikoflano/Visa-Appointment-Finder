@@ -1101,7 +1101,7 @@ function runBadge(profile) {
     node.classList.add("clickable-badge");
     node.addEventListener("click", (event) => {
       event.stopPropagation();
-      openAvailableDates(run.result.dates || []);
+      openAvailableDates(profile, run.result.dates || []);
     });
     return node;
   }
@@ -2266,6 +2266,8 @@ function updateRunsClearButton() {
 
 let datesCursor = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let datesAvailable = new Set();
+let datesProfile = null;
+let datesSelected = null;
 
 function isoYearMonth(iso) {
   const [year, month] = String(iso || "").split("-").map(Number);
@@ -2277,10 +2279,17 @@ function monthIndex(year, month) {
   return year * 12 + month;
 }
 
+function datesBookedIso() {
+  return datesProfile?.currentAppointmentDate || null;
+}
+
 function datesOutsideMonth(cursor, direction) {
   const current = monthIndex(cursor.year, cursor.month);
   let count = 0;
-  for (const iso of datesAvailable) {
+  const marks = new Set(datesAvailable);
+  const booked = datesBookedIso();
+  if (booked) marks.add(booked);
+  for (const iso of marks) {
     const ym = isoYearMonth(iso);
     if (!ym) continue;
     const key = monthIndex(ym.year, ym.month);
@@ -2301,6 +2310,12 @@ function markDatesNav(button, count, earlier) {
     : "";
 }
 
+function syncDatesTakeButton() {
+  const button = $("#dates-take");
+  if (!button) return;
+  button.disabled = !datesSelected || !datesProfile;
+}
+
 function renderDatesCalendar() {
   const { year, month } = datesCursor;
   $("[data-dates-title]", datesDialog).textContent = new Date(
@@ -2309,29 +2324,48 @@ function renderDatesCalendar() {
     1,
   ).toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const count = datesAvailable.size;
-  $("[data-dates-hint]", datesDialog).textContent = count
-    ? `${count} matching ${count === 1 ? "date" : "dates"}`
-    : "No dates";
+  const selectedLabel = datesSelected
+    ? formatDate(datesSelected) || datesSelected
+    : "";
+  $("[data-dates-hint]", datesDialog).textContent = selectedLabel
+    ? `Selected ${selectedLabel}`
+    : count
+      ? `${count} matching ${count === 1 ? "date" : "dates"} — select one to take`
+      : "No dates";
   markDatesNav($("#dates-prev"), datesOutsideMonth(datesCursor, -1), true);
   markDatesNav($("#dates-next"), datesOutsideMonth(datesCursor, 1), false);
   const today = localIsoDate();
+  const booked = datesBookedIso();
   const nodes = WEEKDAYS.map((label) => el("div", { class: "calendar-weekday" }, label));
   for (const cell of monthCells(year, month)) {
     const hit = datesAvailable.has(cell.iso);
-    nodes.push(
-      el(
-        "div",
-        {
-          class: `calendar-cell${cell.outside ? " outside" : ""}${
-            cell.iso === today ? " today" : ""
-          }${hit ? " hit" : ""}`,
-          title: hit ? formatDate(cell.iso) || cell.iso : "",
-        },
-        el("div", { class: "calendar-daynum" }, String(cell.day)),
-      ),
+    const isBooked = booked === cell.iso;
+    const selected = hit && datesSelected === cell.iso;
+    const titleParts = [];
+    if (hit) titleParts.push(formatDate(cell.iso) || cell.iso);
+    if (isBooked) titleParts.push("Current appointment");
+    const node = el(
+      "div",
+      {
+        class: `calendar-cell${cell.outside ? " outside" : ""}${
+          cell.iso === today ? " today" : ""
+        }${hit ? " hit" : ""}${isBooked ? " booked" : ""}${
+          selected ? " selected" : ""
+        }`,
+        title: titleParts.join(" · "),
+      },
+      el("div", { class: "calendar-daynum" }, String(cell.day)),
     );
+    if (hit) {
+      node.addEventListener("click", () => {
+        datesSelected = cell.iso;
+        renderDatesCalendar();
+      });
+    }
+    nodes.push(node);
   }
   $("[data-dates]", datesDialog).replaceChildren(...nodes);
+  syncDatesTakeButton();
 }
 
 function shiftDatesCalendar(delta) {
@@ -2340,7 +2374,9 @@ function shiftDatesCalendar(delta) {
   renderDatesCalendar();
 }
 
-function openAvailableDates(dates) {
+function openAvailableDates(profile, dates) {
+  datesProfile = profile;
+  datesSelected = null;
   datesAvailable = new Set((dates || []).filter(Boolean));
   const first = [...datesAvailable].sort()[0];
   datesCursor = isoYearMonth(first) || {
@@ -2351,12 +2387,38 @@ function openAvailableDates(dates) {
   renderDatesCalendar();
 }
 
+async function takeSelectedDate() {
+  if (!datesProfile || !datesSelected) return;
+  const label = formatDate(datesSelected) || datesSelected;
+  if (
+    !(await confirmAction(
+      `Reschedule "${datesProfile.name}" to ${label}? The bot will log into AIS and update the appointment if that date is still available.`,
+      { okLabel: "Take this date", variant: "warning" },
+    ))
+  ) {
+    return;
+  }
+  const profileId = datesProfile.id;
+  const date = datesSelected;
+  try {
+    await api("POST", `/api/profiles/${profileId}/reschedule`, { date });
+    datesDialog.hide();
+    toast(`Reschedule queued for ${label}`, "success");
+  } catch (error) {
+    toast(error.message);
+  }
+  refresh();
+}
+
 $("#dates-prev").addEventListener("click", () => shiftDatesCalendar(-1));
 $("#dates-next").addEventListener("click", () => shiftDatesCalendar(1));
 $("#dates-today").addEventListener("click", () => {
   const now = new Date();
   datesCursor = { year: now.getFullYear(), month: now.getMonth() };
   renderDatesCalendar();
+});
+$("#dates-take").addEventListener("click", () => {
+  void takeSelectedDate();
 });
 
 function fillErrorDialog(run) {

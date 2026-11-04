@@ -1349,6 +1349,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "POST",
+      pattern: /^\/api\/profiles\/(\d+)\/reschedule$/,
+      handler: async ({ params, body }) => {
+        const profile = await requireProfile(profileId(params));
+        if (profile.intakeStatus !== "ready") {
+          throw new ValidationError(
+            "This profile is still waiting for visa account details",
+          );
+        }
+        const date = String(body.date ?? "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(+new Date(date))) {
+          throw new ValidationError("Invalid date; use YYYY-MM-DD");
+        }
+        if (!scheduler.enqueue(profile.id, "manual", { targetDate: date })) {
+          throw new HttpError(409, "Already running or queued");
+        }
+        return { ok: true };
+      },
+    },
+    {
+      method: "POST",
       pattern: /^\/api\/profiles\/(\d+)\/cancel$/,
       handler: async ({ params }) => ({
         ok: scheduler.cancel(profileId(params)),

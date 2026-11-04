@@ -83,6 +83,22 @@ import { addDays, formatDate } from "./utils/dateUtils";
     );
     result.dates = possibleDates.map(toIsoDate);
 
+    if (parsedConfig.reschedule && parsedConfig.targetDate) {
+      const targetIso = toIsoDate(parsedConfig.targetDate);
+      const match = dates.find((date) => toIsoDate(date) === targetIso);
+      if (!match) {
+        throw new Error(
+          `Target date ${targetIso} is no longer available on AIS`,
+        );
+      }
+      result.ok = true;
+      result.outcome = "available";
+      await appointmentService.reschedule(match);
+      result.rescheduled = true;
+      result.currentAppointment = targetIso;
+      return;
+    }
+
     if (!possibleDates.length) {
       result.ok = true;
       result.outcome = "none";
@@ -92,9 +108,8 @@ import { addDays, formatDate } from "./utils/dateUtils";
     result.ok = true;
     result.outcome = "available";
 
-    const firstDate = possibleDates[0];
-
     if (parsedConfig.reschedule) {
+      const firstDate = possibleDates[0];
       await appointmentService.reschedule(firstDate);
       result.rescheduled = true;
       result.currentAppointment = toIsoDate(firstDate);

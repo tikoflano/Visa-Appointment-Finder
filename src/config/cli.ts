@@ -15,7 +15,7 @@ export function parseCliArgs(): Config {
       reschedule: {
         type: "boolean",
         describe:
-          "Book the first matching date. The server decides whether to pass this.",
+          "Book the first matching date, or targetDate when set. The server decides whether to pass this.",
         default: false,
       },
       probe: {
@@ -23,6 +23,13 @@ export function parseCliArgs(): Config {
         describe:
           "Validate credentials and read booked date plus visa classes only. Skip the appointment calendar.",
         default: false,
+      },
+      targetDate: {
+        type: "string",
+        alias: "target-date",
+        describe:
+          "With --reschedule, book this specific date (YYYY-MM-DD) if AIS still lists it.",
+        default: "",
       },
       maxDate: {
         type: "string",
@@ -51,6 +58,7 @@ export function parseCliArgs(): Config {
 export function validateAndParseDates(config: Config): ParsedConfig {
   let maxDate: Date | undefined;
   let minDate: Date | undefined;
+  let targetDate: Date | undefined;
 
   if (config.maxDate) {
     maxDate = parseDateAsUtc(config.maxDate);
@@ -66,10 +74,21 @@ export function validateAndParseDates(config: Config): ParsedConfig {
     }
   }
 
+  if (config.targetDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(config.targetDate.trim())) {
+      throw Error("Invalid targetDate; use YYYY-MM-DD");
+    }
+    targetDate = parseDateAsUtc(config.targetDate);
+    if (isNaN(+targetDate)) {
+      throw Error("Invalid targetDate provided");
+    }
+  }
+
   return {
     headless: config.headless,
     reschedule: config.reschedule,
     probe: config.probe,
+    targetDate,
     maxDate,
     minDate,
     debug: config.debug,

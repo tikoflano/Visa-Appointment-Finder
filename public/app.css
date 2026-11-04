@@ -825,6 +825,31 @@ sl-dialog.dates-dialog::part(body) {
 
 .dates-calendar .calendar-cell.hit {
   --chip-color: #2457d6;
+  cursor: pointer;
+}
+
+.dates-calendar .calendar-cell.hit:hover .calendar-daynum {
+  outline: 2px solid color-mix(in srgb, var(--chip-color, #2457d6) 55%, #000);
+  outline-offset: 2px;
+}
+
+.dates-calendar .calendar-cell.hit.selected .calendar-daynum {
+  outline: 2px solid #0b1f4a;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chip-color, #2457d6) 35%, transparent);
+}
+
+.dates-calendar .calendar-cell.booked .calendar-daynum {
+  border: 1.5px dashed #a15c07;
+  color: #a15c07;
+  background: transparent;
+  font-weight: 700;
+}
+
+.dates-calendar .calendar-cell.hit.booked .calendar-daynum {
+  background: var(--chip-color, #2457d6);
+  color: #fff;
+  border-color: #0b1f4a;
 }
 
 #dates-prev.has-more::part(base),

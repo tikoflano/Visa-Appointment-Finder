@@ -37,7 +37,12 @@ export class Scheduler {
   private readonly liveBotUrl: string | undefined;
   private readonly onChange: (() => void) | undefined;
   private readonly active = new Map<number, ActiveRun>();
-  private queue: { profileId: number; trigger: string; enqueuedAt: number }[] = [];
+  private queue: {
+    profileId: number;
+    trigger: string;
+    enqueuedAt: number;
+    targetDate?: string;
+  }[] = [];
   private draining: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   /** Extra due-check loop while the Live page has SSE viewers (needed in DEV). */
@@ -124,9 +129,18 @@ export class Scheduler {
   }
 
   /** Returns false when the profile is already running or queued. */
-  enqueue(profileId: number, trigger: string): boolean {
+  enqueue(
+    profileId: number,
+    trigger: string,
+    options: { targetDate?: string } = {},
+  ): boolean {
     if (this.getState(profileId) !== "idle") return false;
-    this.queue.push({ profileId, trigger, enqueuedAt: Date.now() });
+    this.queue.push({
+      profileId,
+      trigger,
+      enqueuedAt: Date.now(),
+      targetDate: options.targetDate,
+    });
     this.emitChange();
     this.drain();
     return true;
@@ -247,7 +261,10 @@ export class Scheduler {
         while (this.queue.length && this.active.size < maxConcurrentRuns) {
           const item = this.queue.shift()!;
           // Start only — do not wait for the child to exit.
-          void this.startRun(item.profileId, item.trigger, { probe: false });
+          void this.startRun(item.profileId, item.trigger, {
+            probe: false,
+            targetDate: item.targetDate,
+          });
         }
       } catch (error) {
         console.error("Failed to start queued runs:", error);
@@ -258,7 +275,7 @@ export class Scheduler {
   private async startRun(
     profileId: number,
     trigger: string,
-    options: { probe: boolean },
+    options: { probe: boolean; targetDate?: string },
   ): Promise<{ status: RunStatus; result: BotResult | null }> {
     const profile = await this.store.getProfile(profileId);
     if (!profile) {
@@ -282,7 +299,7 @@ export class Scheduler {
     const { runTimeoutMinutes, botDebug } = await this.store.getSettings();
     const child = spawn(
       process.execPath,
-      this.buildArgs(profile, botDebug, options.probe),
+      this.buildArgs(profile, botDebug, options.probe, options.targetDate),
       {
         env,
         cwd: path.resolve(__dirname, "..", ".."),
@@ -417,10 +434,13 @@ export class Scheduler {
     profile: Profile,
     debug: boolean,
     probe: boolean,
+    targetDate?: string,
   ): string[] {
     const args = [RUNNER_PATH, "--headless"];
     if (probe) {
       args.push("--probe");
+    } else if (targetDate) {
+      args.push("--reschedule", `--targetDate=${targetDate}`);
     } else if (profile.actions.includes(Action.Reschedule)) {
       args.push("--reschedule");
     }
