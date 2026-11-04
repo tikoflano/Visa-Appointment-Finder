@@ -715,22 +715,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       public: true,
       handler: async ({ req, res, session }) => {
         const sid = getCookie(req, "sid");
+        // Impersonating admin: logout exits impersonation and keeps the admin session.
+        if (session?.role === "admin" && session.impersonating) {
+          await audit(
+            {
+              profileId: session.profileId ?? null,
+              actor: "admin",
+              action: "impersonate_stop",
+              detail: { via: "logout" },
+            },
+            req,
+          );
+          sessions.update(sid, { impersonating: false, profileId: null });
+          return { ok: true, returnedToAdmin: true };
+        }
         if (session?.role === "user" && session.profileId) {
           await audit(
             {
               profileId: session.profileId,
               actor: "user",
               action: "logout",
-            },
-            req,
-          );
-        } else if (session?.impersonating && session.profileId) {
-          await audit(
-            {
-              profileId: session.profileId,
-              actor: "admin",
-              action: "impersonate_stop",
-              detail: { via: "logout" },
             },
             req,
           );

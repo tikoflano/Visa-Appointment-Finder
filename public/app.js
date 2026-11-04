@@ -40,6 +40,7 @@ const probingIds = new Set();
 
 let loginMode = "user";
 let sessionRole = null;
+let realSessionRole = null;
 let impersonating = false;
 let registerToken = "";
 let turnstileSiteKey = null;
@@ -490,6 +491,7 @@ async function boot() {
 
 async function applySession(session) {
   sessionRole = session.role;
+  realSessionRole = session.realRole || session.role;
   impersonating = !!session.impersonating;
   turnstileSiteKey = session.turnstileSiteKey || turnstileSiteKey;
   turnstileRequiredFlag = !!session.turnstileRequired;
@@ -504,6 +506,15 @@ async function applySession(session) {
     if (!adminPath) history.replaceState(null, "", "/admin");
     showApp(session.dev);
   }
+}
+
+async function stopImpersonation() {
+  await api("POST", "/api/admin/stop-impersonation", {});
+  const session = await api("GET", "/api/session");
+  if (!session.authenticated || session.impersonating) {
+    throw new Error("Could not return to admin session");
+  }
+  await applySession(session);
 }
 
 function applyLoginMode() {
@@ -592,6 +603,8 @@ function showUserPortal(session) {
     banner.hidden = false;
     $("#impersonation-banner-text").textContent =
       `Viewing as ${session.profileName || "user"} (${session.visaEmail || ""})`;
+    const exitBtn = $("#stop-impersonation");
+    if (exitBtn) exitBtn.textContent = "Back to admin";
   } else {
     banner.hidden = true;
   }
@@ -683,9 +696,20 @@ $("#register-form").addEventListener("submit", async (event) => {
 });
 
 $("#logout").addEventListener("click", async () => {
-  const adminLogout = sessionRole === "admin" && !impersonating;
+  // Impersonation: logout returns to admin instead of destroying the session.
+  if (impersonating) {
+    try {
+      await stopImpersonation();
+      toast("Returned to admin", "success");
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
+  const adminLogout = sessionRole === "admin" || realSessionRole === "admin";
   await api("POST", "/api/logout", {});
   sessionRole = null;
+  realSessionRole = null;
   impersonating = false;
   if (adminLogout) {
     if (!isAdminPath()) location.assign("/admin");
@@ -699,9 +723,7 @@ $("#logout").addEventListener("click", async () => {
 
 $("#stop-impersonation").addEventListener("click", async () => {
   try {
-    await api("POST", "/api/admin/stop-impersonation", {});
-    const session = await api("GET", "/api/session");
-    await applySession(session);
+    await stopImpersonation();
   } catch (error) {
     toast(error.message);
   }
