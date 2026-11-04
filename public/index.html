@@ -46,6 +46,10 @@
             <sl-icon-button id="new-profile" class="hero-action add" name="person-plus-fill" label="New profile"></sl-icon-button>
           </sl-tooltip>
           <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Live bots</span>
+            <sl-icon-button id="open-live" class="hero-action live" name="camera-video-fill" label="Live bots"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
             <span slot="content">All runs</span>
             <sl-icon-button id="open-all-runs" class="hero-action all-runs" name="clock-history" label="All runs"></sl-icon-button>
           </sl-tooltip>
@@ -183,6 +187,7 @@
         <span id="queue-warning-text"></span>
       </sl-alert>
 
+      <div id="profiles-panel">
       <div class="table-wrap">
       <div class="table-toolbar">
         <sl-switch id="hide-disabled" size="small">Hide disabled</sl-switch>
@@ -209,8 +214,54 @@
         No profiles yet. Click <strong>New profile</strong> to add one.
       </p>
       <p id="empty-enabled" class="hint" hidden>No enabled profiles.</p>
+      </div>
+
+      <div id="live-view" hidden>
+        <sl-alert id="live-dev-banner" variant="warning" open hidden>
+          Dev Live only shows bots started by <strong>this</strong> process (Run now, or due checks while this page is open).
+          Scheduled bots on <code>visa-ui</code> (:3000 / Cloudflare) will not appear here — open Live on that UI to watch them, or stop visa-ui.
+        </sl-alert>
+        <div class="live-header">
+          <div>
+            <h2 class="live-title">Live bots</h2>
+            <p class="hint live-subtitle">
+              Streams only while this page is open. Headless Chromium via CDP — not a recording.
+            </p>
+          </div>
+          <div class="live-header-actions">
+            <sl-badge id="live-status" variant="neutral">Connecting…</sl-badge>
+            <sl-button id="live-back" size="small" variant="default">Back to profiles</sl-button>
+          </div>
+        </div>
+        <div id="live-grid" class="live-grid"></div>
+        <p id="live-empty" class="hint" hidden>
+          No enabled profiles and nothing running. Enable a profile or open one from the main list, then use <strong>Run now</strong> here.
+        </p>
+      </div>
     </section>
     </main>
+
+    <div id="live-enlarge" class="live-enlarge" hidden>
+      <div class="live-enlarge-backdrop" data-live-enlarge-close></div>
+      <div class="live-enlarge-panel" role="dialog" aria-modal="true" aria-label="Live bot preview">
+        <div class="live-enlarge-toolbar">
+          <div class="live-enlarge-heading">
+            <strong id="live-enlarge-title">Live</strong>
+            <span id="live-enlarge-next" class="hint"></span>
+          </div>
+          <div class="live-enlarge-actions">
+            <sl-button id="live-enlarge-run" size="small" variant="primary">Run now</sl-button>
+            <sl-button id="live-enlarge-cancel" size="small" variant="default" hidden>Cancel</sl-button>
+            <sl-button id="live-enlarge-fullscreen" size="small">Fullscreen</sl-button>
+            <sl-button id="live-enlarge-close" size="small" variant="default" data-live-enlarge-close>Close</sl-button>
+          </div>
+        </div>
+        <div id="live-enlarge-stage" class="live-enlarge-stage">
+          <img id="live-enlarge-img" alt="Live bot browser" />
+          <p id="live-enlarge-placeholder" class="live-placeholder">Waiting for frames…</p>
+        </div>
+      </div>
+    </div>
 
     <sl-dialog id="profile-dialog" label="Profile">
       <form id="profile-form">

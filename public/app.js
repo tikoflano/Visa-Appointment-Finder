@@ -24,6 +24,7 @@ import "./app.css";
 registerSystemIconsFromSelf();
 
 const REFRESH_MS = 10000;
+const LIVE_CLOCK_MS = 1000;
 const $ = (selector, root = document) => root.querySelector(selector);
 const named = (form, name) => form.querySelector(`[name="${name}"]`);
 
@@ -33,6 +34,7 @@ let profiles = [];
 let checkIntervalMinutes = 5;
 let hideDisabled = localStorage.getItem(HIDE_DISABLED_KEY) === "1";
 let refreshTimer;
+let liveClockTimer;
 let setupMode = false;
 let confirmResolve;
 /** Profile ids currently waiting on an enable-time AIS probe. */
@@ -51,6 +53,13 @@ const turnstileWidgets = new Map();
 function isAdminPath() {
   return (
     location.pathname === "/admin" || location.pathname.startsWith("/admin/")
+  );
+}
+
+function isLivePath() {
+  return (
+    location.pathname === "/admin/live" ||
+    location.pathname === "/admin/live/"
   );
 }
 
@@ -527,6 +536,7 @@ function applyLoginMode() {
 
 async function showLogin(setupRequired) {
   clearInterval(refreshTimer);
+  stopLiveView();
   $("#app-view").hidden = true;
   $("#user-view").hidden = true;
   $("#register-view").hidden = true;
@@ -556,15 +566,21 @@ function hideAuthViews() {
   document.body.classList.remove("is-login");
 }
 
+let appDevMode = false;
+
 function showApp(dev) {
   hideAuthViews();
   $("#user-view").hidden = true;
   $("#app-view").hidden = false;
   $("#app-toolbar").hidden = false;
   document.body.classList.add("is-app");
+  appDevMode = !!dev;
+  document.body.classList.toggle("is-dev", appDevMode);
   setBanner("#dev-banner", !!dev);
+  setBanner("#live-dev-banner", !!dev);
   for (const id of [
     "#new-profile",
+    "#open-live",
     "#open-all-runs",
     "#open-calendar",
     "#open-notifications",
@@ -574,13 +590,47 @@ function showApp(dev) {
     const node = $(id)?.closest("sl-tooltip") || $(id);
     if (node) node.hidden = false;
   }
+  applyAdminPanel();
   refresh();
+  scheduleRefreshTimer();
+}
+
+function scheduleRefreshTimer() {
   clearInterval(refreshTimer);
+  // Live page uses SSE for profile/run state — no polling there.
+  if (isLivePath()) return;
   refreshTimer = setInterval(refresh, REFRESH_MS);
+}
+
+function applyAdminPanel() {
+  const live = isLivePath();
+  $("#profiles-panel").hidden = live;
+  $("#live-view").hidden = !live;
+  document.body.classList.toggle("is-live", live);
+  if (live) startLiveView();
+  else stopLiveView();
+  scheduleRefreshTimer();
+}
+
+function goAdminHome() {
+  if (location.pathname !== "/admin") {
+    history.pushState(null, "", "/admin");
+  }
+  applyAdminPanel();
+  refresh();
+}
+
+function goLiveView() {
+  if (!isLivePath()) {
+    history.pushState(null, "", "/admin/live");
+  }
+  applyAdminPanel();
+  refresh();
 }
 
 function showUserPortal(session) {
   hideAuthViews();
+  stopLiveView();
   $("#app-view").hidden = true;
   $("#user-view").hidden = false;
   $("#app-toolbar").hidden = false;
@@ -961,9 +1011,18 @@ async function refresh() {
         !openwaReady,
     );
     setQueueWarning();
-    renderProfiles();
+    if (!isLivePath()) renderProfiles();
   } catch (error) {
     console.error(error);
+  } finally {
+    if (isLivePath()) {
+      try {
+        renderLiveGrid();
+        tickLiveClocks();
+      } catch (error) {
+        console.error(error);
+      }
+    }
   }
 }
 
@@ -2859,5 +2918,429 @@ notesClearFilter.addEventListener("click", () => {
 for (const button of document.querySelectorAll("[data-close]")) {
   button.addEventListener("click", () => button.closest("sl-dialog").hide());
 }
+
+// ---- Live bots ----
+
+let liveSource = null;
+let liveFrames = new Map();
+let liveEnlargeProfileId = null;
+let liveWanted = false;
+
+function liveStreamUrl() {
+  return "/api/live/stream";
+}
+
+function setLiveStatus(label, variant = "neutral") {
+  const badge = $("#live-status");
+  if (!badge) return;
+  badge.textContent = label;
+  badge.variant = variant;
+}
+
+function startLiveView() {
+  liveWanted = true;
+  clearInterval(liveClockTimer);
+  liveClockTimer = setInterval(tickLiveClocks, LIVE_CLOCK_MS);
+  if (liveSource && liveSource.readyState !== EventSource.CLOSED) {
+    renderLiveGrid();
+    tickLiveClocks();
+    return;
+  }
+  setLiveStatus("Connecting…", "neutral");
+  const source = new EventSource(liveStreamUrl());
+  liveSource = source;
+  source.addEventListener("open", () => {
+    if (liveSource !== source) return;
+    setLiveStatus("Watching", "success");
+  });
+  source.addEventListener("message", (event) => {
+    if (liveSource !== source) return;
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    handleLiveMessage(message);
+  });
+  source.addEventListener("error", () => {
+    if (liveSource !== source) return;
+    if (!liveWanted || !isLivePath()) {
+      setLiveStatus("Disconnected", "neutral");
+      return;
+    }
+    // EventSource reconnects on its own; surface the gap to the UI.
+    if (source.readyState === EventSource.CONNECTING) {
+      setLiveStatus("Reconnecting…", "warning");
+    } else if (source.readyState === EventSource.CLOSED) {
+      liveSource = null;
+      setLiveStatus("Stream failed", "danger");
+      setTimeout(() => {
+        if (liveWanted && isLivePath()) startLiveView();
+      }, 1500);
+    }
+  });
+  renderLiveGrid();
+  tickLiveClocks();
+}
+
+function stopLiveView() {
+  liveWanted = false;
+  clearInterval(liveClockTimer);
+  liveClockTimer = undefined;
+  const source = liveSource;
+  liveSource = null;
+  if (source) {
+    try {
+      source.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  closeLiveEnlarge();
+  setLiveStatus("Idle", "neutral");
+}
+
+function liveNextRunText(profile) {
+  const nextLabel = nextRunLabel(profile.nextRunAt);
+  if (nextLabel === "—") return "Next run: not scheduled";
+  return `Next run: ${nextLabel}`;
+}
+
+function tickLiveClocks() {
+  if (!isLivePath() || $("#live-view")?.hidden) return;
+  for (const profile of liveCardProfiles()) {
+    const meta = document.querySelector(
+      `.live-card[data-profile-id="${profile.id}"] .live-card-meta`,
+    );
+    if (!meta) continue;
+    meta.textContent = liveNextRunText(profile);
+    meta.title = profile.nextRunAt
+      ? formatTimestamp(profile.nextRunAt)
+      : "Disabled — not scheduled";
+  }
+  if (liveEnlargeProfileId != null) {
+    syncLiveEnlargeChrome(
+      profiles.find((item) => item.id === liveEnlargeProfileId),
+    );
+  }
+}
+
+function handleLiveMessage(message) {
+  if (message.type === "hello") {
+    setLiveStatus(message.screencasting ? "Watching" : "Connected", "success");
+    renderLiveGrid();
+    return;
+  }
+  if (message.type === "screencasting") {
+    setLiveStatus(message.on ? "Watching" : "Connected", "success");
+    return;
+  }
+  if (message.type === "profiles" && Array.isArray(message.profiles)) {
+    profiles = message.profiles;
+    for (const profile of profiles) {
+      if (profile.state === "idle" || profile.state === "queued") {
+        liveFrames.delete(profile.id);
+      }
+    }
+    renderLiveGrid();
+    tickLiveClocks();
+    return;
+  }
+  if (message.type === "bot") {
+    if (message.event === "disconnected") {
+      liveFrames.delete(message.profileId);
+      if (liveEnlargeProfileId === message.profileId) {
+        updateLiveEnlargeFrame();
+      }
+    }
+    renderLiveGrid();
+    return;
+  }
+  if (message.type === "frame") {
+    liveFrames.set(message.profileId, message.jpeg);
+    // Large player owns playback — keep storing frames but don't paint cards.
+    if (liveEnlargeProfileId != null) {
+      if (liveEnlargeProfileId === message.profileId) {
+        updateLiveEnlargeFrame();
+      }
+      return;
+    }
+    updateLiveCardFrame(message.profileId, message.jpeg);
+  }
+}
+
+function updateLiveCardFrame(profileId, jpeg) {
+  const card = document.querySelector(
+    `.live-card[data-profile-id="${profileId}"]`,
+  );
+  if (!card) return;
+  const media = card.querySelector(".live-card-media");
+  if (!media) return;
+  let img = media.querySelector("img");
+  if (!img) {
+    img = el("img", { alt: "Live browser" });
+    media.prepend(img);
+  }
+  img.src = `data:image/jpeg;base64,${jpeg}`;
+  media.classList.add("has-frame");
+}
+
+function pauseLiveCardPlayback() {
+  for (const media of document.querySelectorAll(".live-card-media")) {
+    media.classList.remove("has-frame");
+    const img = media.querySelector("img");
+    if (img) img.removeAttribute("src");
+    const placeholder = media.querySelector(".live-placeholder");
+    if (placeholder) placeholder.textContent = "Playing in large view…";
+  }
+}
+
+function liveCardProfiles() {
+  return profiles.filter(
+    (profile) =>
+      profile.enabled ||
+      profile.state === "running" ||
+      profile.state === "queued",
+  );
+}
+
+function renderLiveGrid() {
+  const grid = $("#live-grid");
+  if (!grid || $("#live-view").hidden) return;
+  const cards = liveCardProfiles();
+  $("#live-empty").hidden = cards.length > 0;
+  grid.replaceChildren(
+    ...cards.map((profile) => {
+      const enlarged = liveEnlargeProfileId != null;
+      const jpeg = !enlarged ? liveFrames.get(profile.id) : undefined;
+      const due = nextRunLabel(profile.nextRunAt) === "due";
+      const placeholderText = enlarged
+        ? "Playing in large view…"
+        : profile.state === "running"
+          ? "Waiting for frames…"
+          : profile.state === "queued"
+            ? "Queued…"
+            : due
+              ? appDevMode
+                ? "Due — Run now (or stop visa-ui so this page can start it)"
+                : "Due — waiting for scheduler…"
+              : "Idle — Run now to watch";
+      const mediaChildren = [
+        el("p", { class: "live-placeholder" }, placeholderText),
+      ];
+      if (jpeg) {
+        mediaChildren.unshift(
+          el("img", {
+            alt: `${profile.name} live browser`,
+            src: `data:image/jpeg;base64,${jpeg}`,
+          }),
+        );
+      }
+      const media = el(
+        "div",
+        {
+          class: `live-card-media${jpeg ? " has-frame" : ""}`,
+          title: "Click to enlarge",
+        },
+        ...mediaChildren,
+      );
+      media.addEventListener("click", () => openLiveEnlarge(profile.id));
+
+      const busy =
+        profile.state === "running" || profile.state === "queued";
+      const actions = el(
+        "div",
+        { class: "live-card-actions" },
+        (() => {
+          const runBtn = el(
+            "sl-button",
+            {
+              size: "small",
+              variant: "primary",
+              disabled: busy || !profile.enabled ? true : undefined,
+            },
+            "Run now",
+          );
+          runBtn.addEventListener("click", (event) => {
+            event.stopPropagation();
+            runNow(profile);
+          });
+          return runBtn;
+        })(),
+        busy
+          ? (() => {
+              const cancelBtn = el(
+                "sl-button",
+                { size: "small", variant: "default" },
+                "Cancel",
+              );
+              cancelBtn.addEventListener("click", (event) => {
+                event.stopPropagation();
+                cancelRun(profile);
+              });
+              return cancelBtn;
+            })()
+          : null,
+        (() => {
+          const enlargeBtn = el(
+            "sl-button",
+            { size: "small", variant: "default" },
+            "Enlarge",
+          );
+          enlargeBtn.addEventListener("click", (event) => {
+            event.stopPropagation();
+            openLiveEnlarge(profile.id);
+          });
+          return enlargeBtn;
+        })(),
+      );
+
+      return el(
+        "article",
+        {
+          class: `live-card${profile.state === "running" ? " is-running" : ""}`,
+          "data-profile-id": String(profile.id),
+        },
+        media,
+        el(
+          "div",
+          { class: "live-card-body" },
+          el(
+            "div",
+            { class: "live-card-top" },
+            el("div", { class: "live-card-name" }, profile.name),
+            badge(
+              profile.state === "running"
+                ? "running"
+                : profile.state === "queued"
+                  ? "queued"
+                  : "idle",
+              profile.state === "running"
+                ? "info"
+                : profile.state === "queued"
+                  ? "warn"
+                  : "neutral",
+            ),
+          ),
+          el(
+            "div",
+            {
+              class: "live-card-meta",
+              title: profile.nextRunAt
+                ? formatTimestamp(profile.nextRunAt)
+                : "Disabled — not scheduled",
+            },
+            liveNextRunText(profile),
+          ),
+          actions,
+        ),
+      );
+    }),
+  );
+  if (liveEnlargeProfileId != null) updateLiveEnlargeFrame();
+}
+
+function openLiveEnlarge(profileId) {
+  liveEnlargeProfileId = profileId;
+  const overlay = $("#live-enlarge");
+  overlay.hidden = false;
+  pauseLiveCardPlayback();
+  updateLiveEnlargeFrame();
+}
+
+function closeLiveEnlarge() {
+  liveEnlargeProfileId = null;
+  $("#live-enlarge").hidden = true;
+  const stage = $("#live-enlarge-stage");
+  const img = $("#live-enlarge-img");
+  if (img) img.removeAttribute("src");
+  stage?.classList.remove("has-frame");
+  if (document.fullscreenElement === stage) {
+    document.exitFullscreen?.().catch(() => {});
+  }
+  if (isLivePath()) renderLiveGrid();
+}
+
+function updateLiveEnlargeFrame() {
+  const profile = profiles.find((item) => item.id === liveEnlargeProfileId);
+  $("#live-enlarge-title").textContent = profile
+    ? `Live — ${profile.name}`
+    : "Live";
+  syncLiveEnlargeChrome(profile);
+  const jpeg = liveFrames.get(liveEnlargeProfileId);
+  const stage = $("#live-enlarge-stage");
+  const img = $("#live-enlarge-img");
+  if (jpeg) {
+    img.src = `data:image/jpeg;base64,${jpeg}`;
+    stage.classList.add("has-frame");
+  } else {
+    img.removeAttribute("src");
+    stage.classList.remove("has-frame");
+  }
+}
+
+function syncLiveEnlargeChrome(profile) {
+  const next = $("#live-enlarge-next");
+  const runBtn = $("#live-enlarge-run");
+  const cancelBtn = $("#live-enlarge-cancel");
+  if (!profile) {
+    next.textContent = "";
+    runBtn.disabled = true;
+    cancelBtn.hidden = true;
+    return;
+  }
+  next.textContent = liveNextRunText(profile);
+  next.title = profile.nextRunAt
+    ? formatTimestamp(profile.nextRunAt)
+    : "Disabled — not scheduled";
+  const busy =
+    profile.state === "running" || profile.state === "queued";
+  runBtn.disabled = busy || !profile.enabled;
+  cancelBtn.hidden = !busy;
+}
+
+$("#open-live").addEventListener("click", () => goLiveView());
+$("#live-back").addEventListener("click", () => goAdminHome());
+$("#live-enlarge-close").addEventListener("click", () => closeLiveEnlarge());
+document
+  .querySelectorAll("[data-live-enlarge-close]")
+  .forEach((node) =>
+    node.addEventListener("click", () => closeLiveEnlarge()),
+  );
+$("#live-enlarge-run").addEventListener("click", () => {
+  const profile = profiles.find((item) => item.id === liveEnlargeProfileId);
+  if (profile) runNow(profile);
+});
+$("#live-enlarge-cancel").addEventListener("click", () => {
+  const profile = profiles.find((item) => item.id === liveEnlargeProfileId);
+  if (profile) cancelRun(profile);
+});
+$("#live-enlarge-fullscreen").addEventListener("click", async () => {
+  const stage = $("#live-enlarge-stage");
+  try {
+    if (document.fullscreenElement === stage) {
+      await document.exitFullscreen();
+    } else {
+      await stage.requestFullscreen();
+    }
+  } catch (error) {
+    toast(error.message || "Fullscreen unavailable");
+  }
+});
+
+window.addEventListener("popstate", () => {
+  if (!isAdminPath()) return;
+  if ($("#app-view").hidden) return;
+  applyAdminPanel();
+  refresh();
+});
+
+document.querySelector(".brand")?.addEventListener("click", (event) => {
+  if (!$("#app-view") || $("#app-view").hidden) return;
+  if (!isLivePath()) return;
+  event.preventDefault();
+  goAdminHome();
+});
 
 boot();

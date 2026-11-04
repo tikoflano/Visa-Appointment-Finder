@@ -6,6 +6,7 @@ import {
   type BotResult,
 } from "./botResult";
 import { BrowserService } from "./services/BrowserService";
+import { LiveScreencast } from "./services/LiveScreencast";
 import { VisaAuthenticator } from "./visa/VisaAuthenticator";
 import { AppointmentService } from "./visa/AppointmentService";
 import { addDays, formatDate } from "./utils/dateUtils";
@@ -14,6 +15,7 @@ import { addDays, formatDate } from "./utils/dateUtils";
   const browserService = new BrowserService();
   const result: BotResult = emptyBotResult();
   let appointmentService: AppointmentService | undefined;
+  let live: LiveScreencast | undefined;
 
   try {
     const config = parseCliArgs();
@@ -24,6 +26,8 @@ import { addDays, formatDate } from "./utils/dateUtils";
 
     await browserService.launch(parsedConfig.headless);
     const page = browserService.getPage();
+    live = new LiveScreencast(page);
+    await live.start();
 
     const user_email = process.env.VISA_USER_EMAIL;
     const user_password = process.env.VISA_USER_PASSWORD;
@@ -108,6 +112,7 @@ import { addDays, formatDate } from "./utils/dateUtils";
       result.rescheduleLimit = appointmentService.rescheduleLimit;
     }
     process.stdout.write(formatVisaResult(result));
+    await live?.stop();
     await browserService.close();
   }
 })();

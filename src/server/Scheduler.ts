@@ -6,6 +6,7 @@ import {
   type BotResult,
 } from "../botResult";
 import { Action } from "../types";
+import { LiveHub } from "./LiveHub";
 import { Notifier } from "./Notifier";
 import { Profile, RunStatus, Store } from "./Store";
 
@@ -32,25 +33,68 @@ export type ProfileState = "running" | "queued" | "idle";
 export class Scheduler {
   private readonly store: Store;
   private readonly notifier: Notifier;
+  private readonly liveHub: LiveHub | undefined;
+  private readonly liveBotUrl: string | undefined;
+  private readonly onChange: (() => void) | undefined;
   private readonly active = new Map<number, ActiveRun>();
   private queue: { profileId: number; trigger: string; enqueuedAt: number }[] = [];
   private draining: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
+  /** Extra due-check loop while the Live page has SSE viewers (needed in DEV). */
+  private liveWatchTimer: NodeJS.Timeout | undefined;
   private lastPrune = 0;
+  private ticking = false;
 
-  constructor(store: Store, notifier: Notifier) {
+  constructor(
+    store: Store,
+    notifier: Notifier,
+    options?: {
+      liveHub?: LiveHub;
+      liveBotUrl?: string;
+      onChange?: () => void;
+    },
+  ) {
     this.store = store;
     this.notifier = notifier;
+    this.liveHub = options?.liveHub;
+    this.liveBotUrl = options?.liveBotUrl;
+    this.onChange = options?.onChange;
   }
 
   async start(): Promise<void> {
     await this.store.markStaleRunsInterrupted();
-    this.timer = setInterval(() => this.tick(), TICK_MS);
-    this.tick();
+    this.timer = setInterval(() => void this.tick(), TICK_MS);
+    void this.tick();
+  }
+
+  /** Run a due-profile check now (e.g. when the Live page opens). */
+  kick(): void {
+    void this.tick();
+  }
+
+  /**
+   * Keep checking due profiles while someone is on Live. In DEV the normal
+   * scheduler timer is off; without this, opening Live only kicks once and
+   * later "due" slots never start.
+   */
+  startLiveWatching(): void {
+    if (this.liveWatchTimer) {
+      void this.tick();
+      return;
+    }
+    void this.tick();
+    this.liveWatchTimer = setInterval(() => void this.tick(), TICK_MS);
+  }
+
+  stopLiveWatching(): void {
+    if (!this.liveWatchTimer) return;
+    clearInterval(this.liveWatchTimer);
+    this.liveWatchTimer = undefined;
   }
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.stopLiveWatching();
     this.queue = [];
     const finished = [...this.active.values()].map(
       (run) => new Promise((resolve) => run.child.once("close", resolve)),
@@ -71,10 +115,19 @@ export class Scheduler {
     return "idle";
   }
 
+  /** Active Playwright children (for the live viewer). */
+  listActive(): { profileId: number; runId: number }[] {
+    return [...this.active.entries()].map(([profileId, run]) => ({
+      profileId,
+      runId: run.runId,
+    }));
+  }
+
   /** Returns false when the profile is already running or queued. */
   enqueue(profileId: number, trigger: string): boolean {
     if (this.getState(profileId) !== "idle") return false;
     this.queue.push({ profileId, trigger, enqueuedAt: Date.now() });
+    this.emitChange();
     this.drain();
     return true;
   }
@@ -133,16 +186,29 @@ export class Scheduler {
   cancel(profileId: number): boolean {
     const queuedBefore = this.queue.length;
     this.queue = this.queue.filter((item) => item.profileId !== profileId);
+    const removedFromQueue = this.queue.length !== queuedBefore;
     const run = this.active.get(profileId);
     if (run) {
       run.cancelled = true;
       this.signal(run.child, "SIGTERM");
+      this.emitChange();
       return true;
     }
-    return this.queue.length !== queuedBefore;
+    if (removedFromQueue) this.emitChange();
+    return removedFromQueue;
+  }
+
+  private emitChange(): void {
+    try {
+      this.onChange?.();
+    } catch (error) {
+      console.error("Scheduler onChange failed:", error);
+    }
   }
 
   private async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
     try {
       if (Date.now() - this.lastPrune > PRUNE_EVERY_MS) {
         this.lastPrune = Date.now();
@@ -167,6 +233,8 @@ export class Scheduler {
       }
     } catch (error) {
       console.error("Scheduler tick failed:", error);
+    } finally {
+      this.ticking = false;
     }
   }
 
@@ -200,10 +268,11 @@ export class Scheduler {
     const runId = await this.store.createRun(profileId, trigger);
     let env: NodeJS.ProcessEnv;
     try {
-      env = await this.buildEnv(profile);
+      env = await this.buildEnv(profile, runId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.finishRun(runId, "failed", null, `${message}\n`);
+      this.liveHub?.revokeRun(runId);
       if (!options.probe) {
         this.notifier.queueFailureAlarm(profileId, "failed", null);
       }
@@ -225,6 +294,7 @@ export class Scheduler {
 
     const run: ActiveRun = { runId, child, cancelled: false, debug: botDebug };
     this.active.set(profileId, run);
+    this.emitChange();
 
     let stdout = "";
     let stderr = "";
@@ -300,7 +370,9 @@ export class Scheduler {
         } catch (error) {
           console.error(`Failed to record run ${runId}:`, error);
         }
+        this.liveHub?.revokeRun(runId);
         this.active.delete(profileId);
+        this.emitChange();
         this.drain();
         resolve({ status, result });
       };
@@ -310,7 +382,10 @@ export class Scheduler {
     });
   }
 
-  private async buildEnv(profile: Profile): Promise<NodeJS.ProcessEnv> {
+  private async buildEnv(
+    profile: Profile,
+    runId: number,
+  ): Promise<NodeJS.ProcessEnv> {
     const env: NodeJS.ProcessEnv = {};
     for (const key of INHERITED_ENV) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -319,8 +394,19 @@ export class Scheduler {
     if (!profile.visaEmail || !profile.visaProcessId) {
       throw new Error("Profile is missing visa account details");
     }
+
+    const live: NodeJS.ProcessEnv = {};
+    if (this.liveHub && this.liveBotUrl) {
+      const token = this.liveHub.registerRun(runId, profile.id, profile.name);
+      live.VISA_LIVE_URL = this.liveBotUrl;
+      live.VISA_LIVE_TOKEN = token;
+      live.VISA_LIVE_RUN_ID = String(runId);
+      live.VISA_LIVE_PROFILE_ID = String(profile.id);
+    }
+
     return {
       ...env,
+      ...live,
       VISA_USER_EMAIL: profile.visaEmail,
       VISA_USER_PASSWORD: await this.store.getVisaPassword(profile.id),
       VISA_PROCESS_ID: profile.visaProcessId,

@@ -64,6 +64,10 @@ export default defineConfig({
       "/api": {
         target: `http://127.0.0.1:${apiPort}`,
         changeOrigin: true,
+        ws: true,
+        // Keep SSE (/api/live/stream) from being buffered by the proxy.
+        timeout: 0,
+        proxyTimeout: 0,
       },
     },
   },

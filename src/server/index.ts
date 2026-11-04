@@ -6,6 +6,7 @@ import {
   assertSameOrigin,
   clientIp,
   ipAllowed,
+  isLoopbackIp,
   LoginLockout,
   parseIpAllowlist,
   requestIsHttps,
@@ -16,6 +17,7 @@ import {
   verifyTurnstileToken,
 } from "./httpSecurity";
 import { IntakeMonitor } from "./IntakeMonitor";
+import { LiveHub, liveBotUrl } from "./LiveHub";
 import { Notifier } from "./Notifier";
 import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
@@ -301,9 +303,53 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   await store.initialize();
 
   const notifier = new Notifier(store);
-  const scheduler = new Scheduler(store, notifier);
+  const liveHub = new LiveHub();
+  const scheduler = new Scheduler(store, notifier, {
+    liveHub,
+    liveBotUrl: liveBotUrl(PORT),
+    onChange: () => liveHub.notifyStateChanged(),
+  });
   const intake = new IntakeMonitor(store, notifier);
   const sessions = new Sessions();
+
+  const listProfilesForAdmin = async () => {
+    const [profiles, latestRuns, successfulRuns, settings] = await Promise.all([
+      store.listProfiles(),
+      store.getLatestRuns(),
+      store.getProfilesWithSuccessfulRuns(),
+      store.getSettings(),
+    ]);
+    const intervalMs = settings.intervalMinutes * 60 * 1000;
+    return profiles.map((profile) => {
+      const lastRun = latestRuns.get(profile.id) ?? null;
+      const lastSearchStartedAt =
+        lastRun && lastRun.trigger !== "probe" ? lastRun.startedAt : null;
+      const lag = scheduler.isBehind(
+        profile.id,
+        lastSearchStartedAt,
+        intervalMs,
+      );
+      return {
+        ...profile,
+        state: scheduler.getState(profile.id),
+        lastRun,
+        hasSuccessfulRun: successfulRuns.has(profile.id),
+        nextRunAt: Scheduler.nextRunAt(
+          profile.enabled,
+          lastSearchStartedAt,
+          intervalMs,
+        ),
+        behind: lag.behind,
+        behindMs: lag.elapsedMs,
+      };
+    });
+  };
+
+  liveHub.configure({
+    snapshotProfiles: listProfilesForAdmin,
+    onFirstViewer: () => scheduler.startLiveWatching(),
+    onLastViewer: () => scheduler.stopLiveWatching(),
+  });
   const adminLoginLockout = new LoginLockout();
   const userLoginLockout = new LoginLockout();
   let lastAdminLockoutNotifyAt = 0;
@@ -1027,42 +1073,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "GET",
       pattern: /^\/api\/profiles$/,
       access: "admin",
-      handler: async () => {
-        const [profiles, latestRuns, successfulRuns, settings] =
-          await Promise.all([
-            store.listProfiles(),
-            store.getLatestRuns(),
-            store.getProfilesWithSuccessfulRuns(),
-            store.getSettings(),
-          ]);
-        const intervalMs = settings.intervalMinutes * 60 * 1000;
-        return profiles.map((profile) => {
-          const lastRun = latestRuns.get(profile.id) ?? null;
-          // Probe-only runs do not advance the search schedule.
-          const lastSearchStartedAt =
-            lastRun && lastRun.trigger !== "probe"
-              ? lastRun.startedAt
-              : null;
-          const lag = scheduler.isBehind(
-            profile.id,
-            lastSearchStartedAt,
-            intervalMs,
-          );
-          return {
-            ...profile,
-            state: scheduler.getState(profile.id),
-            lastRun,
-            hasSuccessfulRun: successfulRuns.has(profile.id),
-            nextRunAt: Scheduler.nextRunAt(
-              profile.enabled,
-              lastSearchStartedAt,
-              intervalMs,
-            ),
-            behind: lag.behind,
-            behindMs: lag.elapsedMs,
-          };
-        });
-      },
+      handler: async () => listProfilesForAdmin(),
     },
     {
       method: "POST",
@@ -1445,6 +1456,21 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         );
       }
 
+      // Live SSE stream (not JSON) — frames + profile state while the page is open.
+      if (req.method === "GET" && url.pathname === "/api/live/stream") {
+        assertAdminIpAllowed(req);
+        const sid = getCookie(req, "sid");
+        let session = sessions.get(sid) ?? null;
+        if (DEV && !session) {
+          session = { expires: Date.now() + SESSION_TTL_MS, role: "admin" };
+        }
+        if (!session || session.role !== "admin" || session.impersonating) {
+          throw new HttpError(401, "Not authenticated");
+        }
+        liveHub.handleSse(req, res);
+        return;
+      }
+
       let params: string[] | undefined;
       const route = routes.find((candidate) => {
         if (candidate.method !== req.method) return false;
@@ -1546,6 +1572,27 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         sendJson(res, 500, { error: "Internal server error" }, https);
       }
     }
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    try {
+      if (url.pathname === "/api/live/bot") {
+        // Bot children always dial loopback; reject remote upgrades even with a token.
+        if (!isLoopbackIp(req.socket.remoteAddress || "")) {
+          socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        liveHub.handleBotUpgrade(req, socket, head);
+        return;
+      }
+    } catch {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    socket.destroy();
   });
 
   intake.start();
