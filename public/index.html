@@ -85,6 +85,9 @@
           <p id="setup-hint" class="hint" hidden>
             Choose an admin password (at least 10 characters) to protect this UI.
           </p>
+          <p id="mfa-hint" class="hint" hidden>
+            Enter the 6-digit code from your authenticator app.
+          </p>
           <sl-input
             id="login-email"
             type="email"
@@ -93,6 +96,7 @@
             autocomplete="username"
           ></sl-input>
           <sl-input
+            id="login-password"
             type="password"
             name="password"
             label="Password"
@@ -106,6 +110,17 @@
             name="confirm"
             label="Confirm password"
             autocomplete="new-password"
+            hidden
+          ></sl-input>
+          <sl-input
+            id="login-totp"
+            type="text"
+            name="totp"
+            label="Authenticator code"
+            autocomplete="one-time-code"
+            inputmode="numeric"
+            maxlength="6"
+            pattern="[0-9]{6}"
             hidden
           ></sl-input>
           <div id="login-turnstile" class="turnstile" hidden></div>
@@ -359,6 +374,7 @@
         <sl-tab-group class="settings-tabs">
           <sl-tab slot="nav" panel="notifications">Notifications</sl-tab>
           <sl-tab slot="nav" panel="scheduler">Scheduler</sl-tab>
+          <sl-tab slot="nav" panel="security">Security</sl-tab>
           <sl-tab-panel name="notifications">
             <fieldset>
               <legend>Email</legend>
@@ -514,6 +530,46 @@
                 </span>
               </sl-input>
             </div>
+          </sl-tab-panel>
+          <sl-tab-panel name="security">
+            <fieldset>
+              <legend>Authenticator app (OTP)</legend>
+              <p id="totp-status" class="hint">Loading…</p>
+              <p class="hint">
+                Optional until enabled. Once on, every admin sign-in needs your password and a code from an authenticator app (Google Authenticator, Authy, 1Password, etc.).
+              </p>
+              <div id="totp-setup-panel" class="totp-setup" hidden>
+                <img id="totp-qr" alt="Authenticator QR code" />
+                <p class="hint">Scan the QR, or enter this secret manually:</p>
+                <code id="totp-secret" class="mono totp-secret"></code>
+                <sl-input
+                  id="totp-confirm-code"
+                  type="text"
+                  label="Confirm with a code"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  maxlength="6"
+                  pattern="[0-9]{6}"
+                ></sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <sl-button id="totp-confirm" type="button" size="small" variant="primary">Enable authenticator</sl-button>
+                  <sl-button id="totp-cancel-setup" type="button" size="small">Cancel</sl-button>
+                </div>
+              </div>
+              <div id="totp-actions" class="check-row wide fieldset-actions">
+                <sl-button id="totp-begin-setup" type="button" size="small" variant="primary">Set up authenticator</sl-button>
+                <sl-button id="totp-disable" type="button" size="small" variant="danger" hidden>Disable authenticator</sl-button>
+              </div>
+              <div id="totp-disable-panel" class="grid" hidden>
+                <p class="hint wide">Confirm with your current password or a code from the authenticator.</p>
+                <sl-input name="totpDisablePassword" type="password" autocomplete="current-password" label="Admin password"></sl-input>
+                <sl-input name="totpDisableCode" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="6" label="Authenticator code"></sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <sl-button id="totp-disable-confirm" type="button" size="small" variant="danger">Confirm disable</sl-button>
+                  <sl-button id="totp-disable-cancel" type="button" size="small">Cancel</sl-button>
+                </div>
+              </div>
+            </fieldset>
           </sl-tab-panel>
         </sl-tab-group>
         <sl-alert variant="danger" data-error></sl-alert>

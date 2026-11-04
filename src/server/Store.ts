@@ -308,6 +308,8 @@ function hashInviteToken(token: string): string {
 
 const profileSecretContext = (id: number) => `profile:${id}:visa_password`;
 const GMAIL_SECRET_CONTEXT = "setting:gmail_app_password";
+const ADMIN_TOTP_SECRET_CONTEXT = "setting:admin_totp_secret";
+const ADMIN_TOTP_PENDING_CONTEXT = "setting:admin_totp_pending";
 
 function readOpenwaApiKeyFile(): string {
   const file = process.env.OPENWA_API_KEY_FILE?.trim();
@@ -835,6 +837,81 @@ export class Store {
     const stored = await this.getRawSetting("admin_password_hash");
     if (!stored) return false;
     return verifyScryptPassword(stored, password);
+  }
+
+  // ---- Admin TOTP (authenticator app) ----
+
+  async isAdminTotpEnabled(): Promise<boolean> {
+    const enabled = await this.getRawSetting("admin_totp_enabled");
+    if (enabled !== "1") return false;
+    return !!(await this.getRawSetting("admin_totp_secret_enc"));
+  }
+
+  async hasAdminTotpPending(): Promise<boolean> {
+    return !!(await this.getRawSetting("admin_totp_pending_enc"));
+  }
+
+  async getAdminTotpStatus(): Promise<{ enabled: boolean; pending: boolean }> {
+    return {
+      enabled: await this.isAdminTotpEnabled(),
+      pending: await this.hasAdminTotpPending(),
+    };
+  }
+
+  /**
+   * Start (or restart) enrollment: store a pending secret until confirm.
+   * Does not enable MFA until confirmAdminTotpEnrollment succeeds.
+   */
+  async beginAdminTotpEnrollment(secretBase32: string): Promise<void> {
+    await this.setRawSetting(
+      "admin_totp_pending_enc",
+      this.box.encrypt(secretBase32, ADMIN_TOTP_PENDING_CONTEXT),
+    );
+  }
+
+  async getAdminTotpPendingSecret(): Promise<string | null> {
+    const encrypted = await this.getRawSetting("admin_totp_pending_enc");
+    if (!encrypted) return null;
+    return this.box.decrypt(encrypted, ADMIN_TOTP_PENDING_CONTEXT);
+  }
+
+  async confirmAdminTotpEnrollment(): Promise<void> {
+    const pending = await this.getAdminTotpPendingSecret();
+    if (!pending) {
+      throw new ValidationError("No authenticator enrollment in progress");
+    }
+    await this.setRawSetting(
+      "admin_totp_secret_enc",
+      this.box.encrypt(pending, ADMIN_TOTP_SECRET_CONTEXT),
+    );
+    await this.setRawSetting("admin_totp_enabled", "1");
+    await this.setRawSetting("admin_totp_pending_enc", "");
+    await this.setRawSetting("admin_totp_last_counter", "");
+  }
+
+  async getAdminTotpSecret(): Promise<string | null> {
+    if (!(await this.isAdminTotpEnabled())) return null;
+    const encrypted = await this.getRawSetting("admin_totp_secret_enc");
+    if (!encrypted) return null;
+    return this.box.decrypt(encrypted, ADMIN_TOTP_SECRET_CONTEXT);
+  }
+
+  async getAdminTotpLastCounter(): Promise<number | null> {
+    const raw = await this.getRawSetting("admin_totp_last_counter");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  async setAdminTotpLastCounter(counter: number): Promise<void> {
+    await this.setRawSetting("admin_totp_last_counter", String(counter));
+  }
+
+  async disableAdminTotp(): Promise<void> {
+    await this.setRawSetting("admin_totp_enabled", "0");
+    await this.setRawSetting("admin_totp_secret_enc", "");
+    await this.setRawSetting("admin_totp_pending_enc", "");
+    await this.setRawSetting("admin_totp_last_counter", "");
   }
 
   // ---- Profiles ----

@@ -350,6 +350,27 @@ sl-alert {
   gap: 14px;
 }
 
+.totp-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.totp-setup img {
+  width: 220px;
+  height: 220px;
+  align-self: flex-start;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.totp-secret {
+  display: block;
+  word-break: break-all;
+  user-select: all;
+}
+
 .hint,
 .sub {
   color: var(--muted);

@@ -79,6 +79,7 @@ Commands:
   logs-openwa              Follow OpenWA logs
   dump                     Print decrypted settings and profiles (host Node)
   set-password             Set the admin UI password (host Node)
+  disable-totp             Disable admin authenticator OTP (host Node)
   generate-key             Show/create secrets/master.key and secrets/openwa.api-key
   -h, --help               Show this help
 
@@ -237,7 +238,7 @@ if [ "${1:-}" = "generate-key" ]; then
   exit 0
 fi
 
-if [ "${1:-}" = "set-password" ] || [ "${1:-}" = "dump" ]; then
+if [ "${1:-}" = "set-password" ] || [ "${1:-}" = "disable-totp" ] || [ "${1:-}" = "dump" ]; then
   if [ ! -f "$BASE_DIR/build/server/cli.js" ]; then
     echo "build/server/cli.js is missing. Run: npm run build"
     exit 1

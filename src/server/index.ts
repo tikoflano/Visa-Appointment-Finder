@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import QRCode from "qrcode";
 import {
   assertSameOrigin,
   clientIp,
@@ -23,6 +24,11 @@ import { Scheduler } from "./Scheduler";
 import { SecretBox } from "./SecretBox";
 import { openDatabase, Store, ValidationError } from "./Store";
 import {
+  generateTotpSecret,
+  otpauthUri,
+  verifyTotp,
+} from "./totp";
+import {
   configuredOpenwaBaseUrl,
   ensureOpenwaSession,
   OpenwaClient,
@@ -33,6 +39,7 @@ import {
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const MFA_PENDING_TTL_MS = 5 * 60 * 1000;
 const MAX_BODY_BYTES = 100 * 1024;
 const DEV =
   process.env.VISA_DEV === "1" || process.env.VISA_DEV === "true";
@@ -94,6 +101,10 @@ interface SessionRecord {
   role: SessionRole;
   profileId?: number;
   impersonating?: boolean;
+  /** Password OK but authenticator code not yet verified. */
+  mfaPending?: boolean;
+  /** Sliding TTL; pending MFA uses a shorter window. */
+  ttlMs?: number;
 }
 
 class Sessions {
@@ -103,13 +114,18 @@ class Sessions {
     role: SessionRole;
     profileId?: number;
     impersonating?: boolean;
+    mfaPending?: boolean;
+    ttlMs?: number;
   }): string {
     const token = crypto.randomBytes(32).toString("base64url");
+    const ttlMs = data.ttlMs ?? SESSION_TTL_MS;
     this.sessions.set(token, {
-      expires: Date.now() + SESSION_TTL_MS,
+      expires: Date.now() + ttlMs,
       role: data.role,
       profileId: data.profileId,
       impersonating: !!data.impersonating,
+      mfaPending: !!data.mfaPending,
+      ttlMs,
     });
     return token;
   }
@@ -121,7 +137,7 @@ class Sessions {
       this.sessions.delete(token);
       return undefined;
     }
-    session.expires = Date.now() + SESSION_TTL_MS;
+    session.expires = Date.now() + (session.ttlMs ?? SESSION_TTL_MS);
     return session;
   }
 
@@ -135,6 +151,7 @@ class Sessions {
       role?: SessionRole;
       profileId?: number | null;
       impersonating?: boolean;
+      mfaPending?: boolean;
     },
   ): SessionRecord | undefined {
     const session = this.get(token);
@@ -145,12 +162,20 @@ class Sessions {
     if (patch.impersonating !== undefined) {
       session.impersonating = patch.impersonating;
     }
+    if (patch.mfaPending !== undefined) {
+      session.mfaPending = patch.mfaPending;
+    }
     return session;
   }
 
   destroy(token: string | undefined): void {
     if (token) this.sessions.delete(token);
   }
+}
+
+/** Full admin session (not MFA-pending, not impersonating). */
+function isFullAdminSession(session: SessionRecord | null | undefined): boolean {
+  return !!session && session.role === "admin" && !session.impersonating && !session.mfaPending;
 }
 
 type Handler = (ctx: {
@@ -487,6 +512,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     session: SessionRecord | null,
   ) => {
     const setupRequired = !DEV && !(await store.hasAdminPassword());
+    const mfaEnabled = DEV ? false : await store.isAdminTotpEnabled();
     if (DEV && !session) {
       return {
         authenticated: true,
@@ -495,8 +521,23 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         dev: true,
         impersonating: false,
         portalAccessEnabled: true,
+        mfaEnabled: false,
+        mfaPending: false,
         turnstileSiteKey: turnstileSiteKey(),
         turnstileRequired: false,
+      };
+    }
+    if (session?.mfaPending) {
+      return {
+        authenticated: false,
+        role: null,
+        setupRequired: false,
+        dev: DEV,
+        impersonating: false,
+        mfaEnabled: true,
+        mfaPending: true,
+        turnstileSiteKey: turnstileSiteKey(),
+        turnstileRequired: turnstileRequired(),
       };
     }
     if (!session) {
@@ -506,6 +547,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         setupRequired,
         dev: DEV,
         impersonating: false,
+        mfaEnabled,
+        mfaPending: false,
         turnstileSiteKey: turnstileSiteKey(),
         turnstileRequired: turnstileRequired(),
       };
@@ -527,6 +570,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           setupRequired,
           dev: DEV,
           impersonating: false,
+          mfaEnabled,
+          mfaPending: false,
           turnstileSiteKey: turnstileSiteKey(),
           turnstileRequired: turnstileRequired(),
         };
@@ -546,9 +591,22 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       visaEmail,
       impersonating: !!session.impersonating,
       portalAccessEnabled,
+      mfaEnabled,
+      mfaPending: false,
       turnstileSiteKey: turnstileSiteKey(),
       turnstileRequired: turnstileRequired(),
     };
+  };
+
+  const verifyAdminTotpCode = async (code: string): Promise<boolean> => {
+    const secret = await store.getAdminTotpSecret();
+    if (!secret) return false;
+    const counter = verifyTotp(secret, code);
+    if (counter === null) return false;
+    const last = await store.getAdminTotpLastCounter();
+    if (last !== null && counter <= last) return false;
+    await store.setAdminTotpLastCounter(counter);
+    return true;
   };
 
   /**
@@ -632,7 +690,57 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           await sleep(1000);
           throw new HttpError(401, "Wrong password");
         }
+        // Clear password failures; TOTP failures use the same lockout after this.
         adminLoginLockout.clear(ip);
+        if (!DEV && (await store.isAdminTotpEnabled())) {
+          const pending = sessions.create({
+            role: "admin",
+            mfaPending: true,
+            ttlMs: MFA_PENDING_TTL_MS,
+          });
+          res.setHeader(
+            "Set-Cookie",
+            sessionCookie(
+              pending,
+              MFA_PENDING_TTL_MS / 1000,
+              requestIsHttps(req),
+            ),
+          );
+          return { ok: true, mfaRequired: true };
+        }
+        const token = sessions.create({ role: "admin" });
+        res.setHeader(
+          "Set-Cookie",
+          sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
+        );
+        return { ok: true, mfaRequired: false };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/login\/totp$/,
+      public: true,
+      handler: async ({ req, res, body, session }) => {
+        assertAdminIpAllowed(req);
+        const ip = clientIp(req);
+        if (adminLoginLockout.isLocked(ip)) {
+          throw new HttpError(429, "Too many failed attempts, try later");
+        }
+        if (!session?.mfaPending || session.role !== "admin") {
+          throw new HttpError(401, "Password step required first");
+        }
+        if (!(await store.isAdminTotpEnabled())) {
+          throw new HttpError(400, "Authenticator is not enabled");
+        }
+        if (!(await verifyAdminTotpCode(String(body.code ?? "")))) {
+          if (adminLoginLockout.recordFailure(ip)) {
+            maybeNotifyAdminLockout(ip);
+          }
+          await sleep(1000);
+          throw new HttpError(401, "Wrong authenticator code");
+        }
+        adminLoginLockout.clear(ip);
+        sessions.destroy(getCookie(req, "sid"));
         const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
@@ -1312,6 +1420,78 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "GET",
+      pattern: /^\/api\/admin\/totp$/,
+      handler: async () => store.getAdminTotpStatus(),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/totp\/setup$/,
+      handler: async () => {
+        if (DEV) {
+          throw new HttpError(400, "Authenticator setup is disabled in dev mode");
+        }
+        const secret = generateTotpSecret();
+        await store.beginAdminTotpEnrollment(secret);
+        const otpauthUrl = otpauthUri({
+          secret,
+          accountName: "admin",
+          issuer: "Visa Appointment Finder",
+        });
+        const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
+          errorCorrectionLevel: "M",
+          margin: 2,
+          width: 220,
+        });
+        return { secret, otpauthUrl, qrDataUrl };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/totp\/confirm$/,
+      handler: async ({ body }) => {
+        if (DEV) {
+          throw new HttpError(400, "Authenticator setup is disabled in dev mode");
+        }
+        const pending = await store.getAdminTotpPendingSecret();
+        if (!pending) {
+          throw new HttpError(400, "No authenticator enrollment in progress");
+        }
+        const counter = verifyTotp(pending, String(body.code ?? ""));
+        if (counter === null) {
+          await sleep(500);
+          throw new HttpError(401, "Wrong authenticator code");
+        }
+        await store.confirmAdminTotpEnrollment();
+        await store.setAdminTotpLastCounter(counter);
+        return { ok: true, enabled: true };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/totp\/disable$/,
+      handler: async ({ body }) => {
+        if (!(await store.isAdminTotpEnabled())) {
+          await store.disableAdminTotp();
+          return { ok: true, enabled: false };
+        }
+        const password = String(body.password ?? "");
+        const code = String(body.code ?? "");
+        const passwordOk =
+          password.length > 0 && (await store.verifyAdminPassword(password));
+        const codeOk = code.length > 0 && (await verifyAdminTotpCode(code));
+        if (!passwordOk && !codeOk) {
+          await sleep(500);
+          throw new HttpError(
+            401,
+            "Current password or authenticator code required",
+          );
+        }
+        await store.disableAdminTotp();
+        return { ok: true, enabled: false };
+      },
+    },
+    {
+      method: "GET",
       pattern: /^\/api\/settings$/,
       handler: async () => store.getSettings(),
     },
@@ -1464,7 +1644,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         if (DEV && !session) {
           session = { expires: Date.now() + SESSION_TTL_MS, role: "admin" };
         }
-        if (!session || session.role !== "admin" || session.impersonating) {
+        if (!isFullAdminSession(session)) {
           throw new HttpError(401, "Not authenticated");
         }
         liveHub.handleSse(req, res);
@@ -1487,13 +1667,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       }
 
       if (!route.public) {
-        if (!session) {
+        if (!session || session.mfaPending) {
           throw new HttpError(401, "Not authenticated");
         }
         const access = route.access ?? "admin";
         if (access === "admin") {
           assertAdminIpAllowed(req);
-          if (session.role !== "admin" || session.impersonating) {
+          if (!isFullAdminSession(session)) {
             throw new HttpError(403, "Admin access required");
           }
         } else if (access === "user") {

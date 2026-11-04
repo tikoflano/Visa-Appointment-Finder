@@ -41,6 +41,7 @@ let confirmResolve;
 const probingIds = new Set();
 
 let loginMode = "user";
+let mfaStep = false;
 let sessionRole = null;
 let realSessionRole = null;
 let impersonating = false;
@@ -491,6 +492,10 @@ async function boot() {
     await applySession(session);
     return;
   }
+  if (session.mfaPending && isAdminPath()) {
+    await showLogin(false, { mfaPending: true });
+    return;
+  }
   if (session.setupRequired && !isAdminPath()) {
     location.replace(`/admin${location.search}`);
     return;
@@ -528,13 +533,24 @@ async function stopImpersonation() {
 
 function applyLoginMode() {
   const email = $("#login-email");
-  email.hidden = loginMode !== "user";
-  email.required = loginMode === "user";
-  named($("#login-form"), "password").label =
+  const password = $("#login-password");
+  const totp = $("#login-totp");
+  const confirm = $("#confirm-row");
+  email.hidden = mfaStep || loginMode !== "user";
+  email.required = !mfaStep && loginMode === "user";
+  password.hidden = mfaStep;
+  password.required = !mfaStep;
+  password.label =
     loginMode === "admin" ? "Admin password" : "Portal password";
+  confirm.hidden = mfaStep || !setupMode;
+  totp.hidden = !mfaStep;
+  totp.required = mfaStep;
+  $("#setup-hint").hidden = mfaStep || !setupMode;
+  $("#mfa-hint").hidden = !mfaStep;
+  if (mfaStep) $("#login-turnstile").hidden = true;
 }
 
-async function showLogin(setupRequired) {
+async function showLogin(setupRequired, options = {}) {
   clearInterval(refreshTimer);
   stopLiveView();
   $("#app-view").hidden = true;
@@ -547,17 +563,29 @@ async function showLogin(setupRequired) {
   const adminPath = isAdminPath();
   setupMode = !!setupRequired && adminPath;
   loginMode = adminPath ? "admin" : "user";
-  $("#setup-hint").hidden = !setupMode;
-  $("#confirm-row").hidden = !setupMode;
-  $(".login-title").textContent = setupMode ? "Create password" : "Sign in";
-  $("#login-submit").textContent = setupMode ? "Create password" : "Sign in";
+  mfaStep = !!options.mfaPending && loginMode === "admin";
+  $(".login-title").textContent = mfaStep
+    ? "Authenticator"
+    : setupMode
+      ? "Create password"
+      : "Sign in";
+  $("#login-submit").textContent = mfaStep
+    ? "Verify"
+    : setupMode
+      ? "Create password"
+      : "Sign in";
   const form = $("#login-form");
   named(form, "password").autocomplete = setupMode
     ? "new-password"
     : "current-password";
-  named(form, "confirm").required = setupMode;
+  named(form, "confirm").required = setupMode && !mfaStep;
   applyLoginMode();
-  await mountTurnstile("login-turnstile");
+  if (mfaStep) {
+    $("#login-turnstile").hidden = true;
+    $("#login-totp").focus?.();
+  } else {
+    await mountTurnstile("login-turnstile");
+  }
 }
 
 function hideAuthViews() {
@@ -693,6 +721,16 @@ $("#login-form").addEventListener("submit", async (event) => {
   const form = event.target;
   setError(form);
   try {
+    if (mfaStep) {
+      await api("POST", "/api/login/totp", {
+        code: named(form, "totp").value,
+      });
+      form.reset();
+      mfaStep = false;
+      const session = await api("GET", "/api/session");
+      await applySession(session);
+      return;
+    }
     const turnstileToken = readTurnstileToken("login-turnstile");
     if (setupMode) {
       if (named(form, "password").value !== named(form, "confirm").value) {
@@ -703,10 +741,16 @@ $("#login-form").addEventListener("submit", async (event) => {
         turnstileToken,
       });
     } else if (loginMode === "admin") {
-      await api("POST", "/api/login", {
+      const result = await api("POST", "/api/login", {
         password: named(form, "password").value,
         turnstileToken,
       });
+      if (result?.mfaRequired) {
+        named(form, "password").value = "";
+        named(form, "totp").value = "";
+        await showLogin(false, { mfaPending: true });
+        return;
+      }
     } else {
       await api("POST", "/api/user/login", {
         email: named(form, "email").value,
@@ -718,7 +762,7 @@ $("#login-form").addEventListener("submit", async (event) => {
     const session = await api("GET", "/api/session");
     await applySession(session);
   } catch (error) {
-    resetTurnstile("login-turnstile");
+    if (!mfaStep) resetTurnstile("login-turnstile");
     setError(form, error.message);
   }
 });
@@ -1688,9 +1732,40 @@ $("#test-profile-notification").addEventListener("click", async () => {
 const settingsDialog = $("#settings-dialog");
 const settingsForm = $("#settings-form");
 
+async function refreshTotpSettingsUi() {
+  const statusEl = $("#totp-status");
+  const setupPanel = $("#totp-setup-panel");
+  const disablePanel = $("#totp-disable-panel");
+  const actions = $("#totp-actions");
+  const beginBtn = $("#totp-begin-setup");
+  const disableBtn = $("#totp-disable");
+  setupPanel.hidden = true;
+  disablePanel.hidden = true;
+  actions.hidden = false;
+  try {
+    const status = await api("GET", "/api/admin/totp");
+    if (status.enabled) {
+      statusEl.textContent = "Authenticator is enabled. Admin sign-in requires a code.";
+      beginBtn.textContent = "Replace authenticator";
+      beginBtn.hidden = false;
+      disableBtn.hidden = false;
+    } else {
+      statusEl.textContent = "Authenticator is off. Admin sign-in uses password only.";
+      beginBtn.textContent = "Set up authenticator";
+      beginBtn.hidden = false;
+      disableBtn.hidden = true;
+    }
+  } catch (error) {
+    statusEl.textContent = error.message || "Could not load authenticator status";
+    beginBtn.hidden = true;
+    disableBtn.hidden = true;
+  }
+}
+
 $("#open-settings").addEventListener("click", async () => {
   settingsForm.reset();
   setError(settingsForm);
+  await refreshTotpSettingsUi();
   const settings = await api("GET", "/api/settings");
   for (const field of [
     "gmailUser",
@@ -1945,6 +2020,88 @@ async function sendNotificationTest(channel, button) {
     button.loading = false;
   }
 }
+
+$("#totp-begin-setup").addEventListener("click", async () => {
+  setError(settingsForm);
+  const button = $("#totp-begin-setup");
+  button.loading = true;
+  try {
+    const result = await api("POST", "/api/admin/totp/setup", {});
+    $("#totp-qr").src = result.qrDataUrl;
+    $("#totp-secret").textContent = result.secret;
+    $("#totp-confirm-code").value = "";
+    $("#totp-setup-panel").hidden = false;
+    $("#totp-disable-panel").hidden = true;
+    $("#totp-actions").hidden = true;
+    $("#totp-status").textContent =
+      "Scan the QR with your authenticator app, then enter a code to enable.";
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
+
+$("#totp-cancel-setup").addEventListener("click", async () => {
+  setError(settingsForm);
+  $("#totp-setup-panel").hidden = true;
+  $("#totp-actions").hidden = false;
+  await refreshTotpSettingsUi();
+});
+
+$("#totp-confirm").addEventListener("click", async () => {
+  setError(settingsForm);
+  const button = $("#totp-confirm");
+  button.loading = true;
+  try {
+    await api("POST", "/api/admin/totp/confirm", {
+      code: $("#totp-confirm-code").value,
+    });
+    $("#totp-setup-panel").hidden = true;
+    $("#totp-actions").hidden = false;
+    toast("Authenticator enabled", "success");
+    await refreshTotpSettingsUi();
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
+
+$("#totp-disable").addEventListener("click", () => {
+  setError(settingsForm);
+  named(settingsForm, "totpDisablePassword").value = "";
+  named(settingsForm, "totpDisableCode").value = "";
+  $("#totp-disable-panel").hidden = false;
+  $("#totp-setup-panel").hidden = true;
+  $("#totp-actions").hidden = true;
+});
+
+$("#totp-disable-cancel").addEventListener("click", async () => {
+  $("#totp-disable-panel").hidden = true;
+  $("#totp-actions").hidden = false;
+  await refreshTotpSettingsUi();
+});
+
+$("#totp-disable-confirm").addEventListener("click", async () => {
+  setError(settingsForm);
+  const button = $("#totp-disable-confirm");
+  button.loading = true;
+  try {
+    await api("POST", "/api/admin/totp/disable", {
+      password: named(settingsForm, "totpDisablePassword").value,
+      code: named(settingsForm, "totpDisableCode").value,
+    });
+    $("#totp-disable-panel").hidden = true;
+    $("#totp-actions").hidden = false;
+    toast("Authenticator disabled", "success");
+    await refreshTotpSettingsUi();
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
 
 $("#test-email").addEventListener("click", () => {
   sendNotificationTest("email", $("#test-email"));

@@ -8,6 +8,7 @@ import { openDatabase, Store } from "./Store";
 const USAGE = `Usage:
   node build/server/cli.js generate-key [path]
   node build/server/cli.js set-password
+  node build/server/cli.js disable-totp
   node build/server/cli.js dump`;
 
 function prompt(question: string, hidden: boolean): Promise<string> {
@@ -57,14 +58,27 @@ async function setPassword(store: Store) {
   console.log("Admin password updated");
 }
 
+async function disableTotp(store: Store) {
+  const status = await store.getAdminTotpStatus();
+  if (!status.enabled && !status.pending) {
+    console.log("Authenticator OTP is already disabled");
+    return;
+  }
+  await store.disableAdminTotp();
+  console.log("Authenticator OTP disabled. Admin login is password-only again.");
+}
+
 async function dump(store: Store) {
   const settings = await store.getSettings();
   const profiles = await store.listProfiles();
+  const totp = await store.getAdminTotpStatus();
   const payload = {
     settings: {
       ...settings,
       gmailAppPassword: await store.getGmailAppPassword(),
       openwaApiKey: await store.getOpenwaApiKey(),
+      adminTotpEnabled: totp.enabled,
+      adminTotpPending: totp.pending,
     },
     profiles: await Promise.all(
       profiles.map(async (profile) => ({
@@ -78,7 +92,9 @@ async function dump(store: Store) {
 
 (async () => {
   const [command, ...args] = process.argv.slice(2);
-  if (!["generate-key", "set-password", "dump"].includes(command)) {
+  if (
+    !["generate-key", "set-password", "disable-totp", "dump"].includes(command)
+  ) {
     throw Error(USAGE);
   }
 
@@ -92,6 +108,7 @@ async function dump(store: Store) {
     const store = new Store(db, SecretBox.fromEnvironment());
     await store.initialize();
     if (command === "set-password") await setPassword(store);
+    if (command === "disable-totp") await disableTotp(store);
     if (command === "dump") await dump(store);
   } finally {
     await db.close();

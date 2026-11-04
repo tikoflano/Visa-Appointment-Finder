@@ -63,6 +63,8 @@ The UI never sends stored passwords back to the browser. Leave a password field 
 
 The admin login password is **hashed with scrypt**. It cannot be recovered — only replaced (`./run.sh set-password` or the first-run setup screen at `/admin`). Portal users sign in at `/`; admin setup and admin sign-in are only at `/admin` (not linked from the public login page).
 
+Optional **authenticator-app OTP** (TOTP) can be enabled under Settings → Security. Until you enable it, admin login is password-only. Once enabled, every admin sign-in needs the password and a 6-digit code. The TOTP secret is encrypted with the same AES-GCM master key as other secrets. If you lose the authenticator, run `./run.sh disable-totp` on the host (same Node path as `set-password`) to fall back to password-only.
+
 To print settings and decrypted passwords (needs the master key and `npm run build`):
 
 ```sh
@@ -79,7 +81,7 @@ To print settings and decrypted passwords (needs the master key and `npm run bui
 
 The first run creates `secrets/master.key` if it is missing, builds the `visa` image, starts a detached container (`visa-ui`), and starts the OpenWA sidecar on the `visa` Docker network (see WhatsApp below). Open http://127.0.0.1:3000/admin and create an admin password (or run `./run.sh set-password` first). You can close the terminal; the UI and scheduled checks keep running. Later starts rebuild the image only when source files changed (see [When the Docker image is rebuilt](#when-the-docker-image-is-rebuilt)). If the image did not change and the container is already up, `./run.sh` prints the URL and exits.
 
-`./run.sh dump` and `./run.sh set-password` run on the host with Node; they do not use Docker.
+`./run.sh dump`, `./run.sh set-password`, and `./run.sh disable-totp` run on the host with Node; they do not use Docker.
 
 The UI is published on localhost only. To reach it from another machine:
 
@@ -122,6 +124,7 @@ Commands (`dev`, `restart`, `stop`, `logs`, …) select a mode. Flags (`--rebuil
 | `./run.sh stop-openwa` | Stop the OpenWA sidecar (session data stays on the `openwa-data` volume). |
 | `./run.sh dump` | Print JSON of settings and decrypted profile passwords. Runs on the host with Node (needs `build/server/cli.js`, i.e. `npm run build`). Does not use Docker. |
 | `./run.sh set-password` | Prompt for a new admin UI password. Same host Node path as `dump`. |
+| `./run.sh disable-totp` | Disable admin authenticator OTP (recovery if the app is lost). Same host Node path as `dump`. |
 | `./run.sh generate-key` | Show or create `secrets/master.key` and `secrets/openwa.api-key`. |
 | `./run.sh --help` | Print the same command list. |
 
@@ -165,9 +168,9 @@ The app is localhost-first. A public Cloudflare Tunnel hostname is fine if you h
 2. Proxied Tunnel DNS, SSL **Full (strict)**, **Always Use HTTPS**.
 3. Run with `COOKIE_SECURE=true`, `PUBLIC_BASE_URL=https://your-hostname`, `ADMIN_IP_ALLOWLIST` (your home/office IPs), and Turnstile site + secret keys.
 4. Enable **Bot Fight Mode** and the Free Managed WAF ruleset.
-5. **Zone Lockdown** (or a Free custom WAF / IP Access rule) for `/admin`, `/admin/*`, `/api/login`, `/api/setup`, and other admin API paths to the same allowlisted IPs. Leave `/`, `/api/user/*`, `/api/session`, and static assets public for the portal.
+5. **Zone Lockdown** (or a Free custom WAF / IP Access rule) for `/admin`, `/admin/*`, `/api/login`, `/api/login/totp`, `/api/setup`, and other admin API paths to the same allowlisted IPs. Leave `/`, `/api/user/*`, `/api/session`, and static assets public for the portal.
 6. Spend the single Free **rate limiting** rule on portal auth paths (`/api/user/login`, `/api/user/register`) with Managed Challenge.
-7. Optional: Cloudflare Access email OTP on `/admin*` if your IP changes often and you cannot update the allowlist quickly.
+7. Optional: enable in-app authenticator OTP (Settings → Security) for defense in depth when the allowlist is imperfect; or Cloudflare Access email OTP on `/admin*` if your IP changes often and you cannot update the allowlist quickly. Access at the edge is often better ROI for changing IPs; app TOTP still helps if someone knows the admin password from an allowlisted IP.
 8. Do not run `VISA_DEV` on a Tunnel-reachable container.
 
 Portal login stays at `/`. Admin login stays at `/admin`. The in-app allowlist returns 404 to non-allowlisted clients for admin surfaces even if edge rules misconfigure.
@@ -320,5 +323,6 @@ Admin extras on each profile row: **Send/resend portal invite**, **Impersonate**
 | `npm run dev` | Same as `./run.sh dev` |
 | `npm run cli -- dump` | Same as `./run.sh dump` |
 | `npm run cli -- set-password` | Same as `./run.sh set-password` |
+| `npm run cli -- disable-totp` | Same as `./run.sh disable-totp` |
 | `npm run cli -- generate-key` | Create `secrets/master.key` if it does not exist |
 | `npm run test:openwa` | Typecheck and run the OpenWA notifier tests against a mock gateway |
