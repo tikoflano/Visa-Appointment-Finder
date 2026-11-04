@@ -101,6 +101,7 @@
             name="password"
             label="Password"
             autocomplete="current-password"
+            password-toggle
             required
             autofocus
           ></sl-input>
@@ -110,6 +111,7 @@
             name="confirm"
             label="Confirm password"
             autocomplete="new-password"
+            password-toggle
             hidden
           ></sl-input>
           <sl-input
@@ -141,6 +143,7 @@
             name="password"
             label="Portal password"
             autocomplete="new-password"
+            password-toggle
             required
           ></sl-input>
           <sl-input
@@ -148,6 +151,7 @@
             name="confirm"
             label="Confirm password"
             autocomplete="new-password"
+            password-toggle
             required
           ></sl-input>
           <div id="register-turnstile" class="turnstile" hidden></div>
@@ -296,7 +300,7 @@
         <div class="grid">
           <sl-input name="visaProcessId" label="Visa process ID" inputmode="numeric" required></sl-input>
           <sl-input name="visaEmail" type="email" label="Visa account email" autocomplete="off" required></sl-input>
-          <sl-input name="visaPassword" type="password" label="Visa account password" autocomplete="new-password"></sl-input>
+          <sl-input name="visaPassword" type="password" label="Visa account password" autocomplete="new-password" password-toggle></sl-input>
           <sl-input class="wide" name="emailDestination">
             <span slot="label" class="label-text">
               Notify emails (comma separated)
@@ -395,7 +399,7 @@
                     </sl-tooltip>
                   </span>
                 </sl-input>
-                <sl-input name="gmailAppPassword" type="password" autocomplete="new-password">
+                <sl-input name="gmailAppPassword" type="password" autocomplete="new-password" password-toggle>
                   <span slot="label" class="label-text">
                     Gmail app password
                     <sl-tooltip placement="bottom">
@@ -562,7 +566,7 @@
               </div>
               <div id="totp-disable-panel" class="grid" hidden>
                 <p class="hint wide">Confirm with your current password or a code from the authenticator.</p>
-                <sl-input name="totpDisablePassword" type="password" autocomplete="current-password" label="Admin password"></sl-input>
+                <sl-input name="totpDisablePassword" type="password" autocomplete="current-password" label="Admin password" password-toggle></sl-input>
                 <sl-input name="totpDisableCode" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="6" label="Authenticator code"></sl-input>
                 <div class="check-row wide fieldset-actions">
                   <sl-button id="totp-disable-confirm" type="button" size="small" variant="danger">Confirm disable</sl-button>
@@ -782,6 +786,7 @@
           type="password"
           label="New AIS password"
           autocomplete="new-password"
+          password-toggle
           required
         ></sl-input>
         <sl-alert variant="danger" data-error></sl-alert>
@@ -803,12 +808,14 @@
           type="password"
           label="Current password"
           autocomplete="current-password"
+          password-toggle
         ></sl-input>
         <sl-input
           name="newPassword"
           type="password"
           label="New password"
           autocomplete="new-password"
+          password-toggle
           required
         ></sl-input>
         <sl-input
@@ -816,6 +823,7 @@
           type="password"
           label="Confirm new password"
           autocomplete="new-password"
+          password-toggle
           required
         ></sl-input>
         <sl-alert variant="danger" data-error></sl-alert>
