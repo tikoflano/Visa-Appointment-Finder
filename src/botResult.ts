@@ -59,6 +59,33 @@ export function visaFingerprint(classes: string[]): string | null {
     .join(",");
 }
 
+/** Class codes only (ignore counts): "H1B1x1,H4x4" → ["H1B1","H4"]. */
+export function visaClassesFromFingerprint(
+  fingerprint: string | null | undefined,
+): string[] {
+  const raw = String(fingerprint ?? "").trim();
+  if (!raw) return [];
+  const codes: string[] = [];
+  for (const part of raw.split(",")) {
+    const token = part.trim();
+    if (!token) continue;
+    const match = /^(.+?)x\d+$/i.exec(token);
+    codes.push(match ? match[1] : token);
+  }
+  return codes;
+}
+
+export function classSetsIntersect(
+  left: string[] | Set<string>,
+  right: string[] | Set<string>,
+): boolean {
+  const rightSet = right instanceof Set ? right : new Set(right);
+  for (const code of left) {
+    if (rightSet.has(code)) return true;
+  }
+  return false;
+}
+
 function integerInRange(value: unknown, min: number, max: number): number | null {
   if (typeof value !== "number" || !Number.isInteger(value)) return null;
   if (value < min || value > max) return null;
@@ -188,4 +215,33 @@ export function windowsOverlap(
   const startLeft = left.start ?? "0000-01-01";
   const startRight = right.start ?? "0000-01-01";
   return startLeft < right.endExclusive && startRight < left.endExclusive;
+}
+
+/**
+ * User date edits: refuse when windows overlap and any visa class is shared
+ * (counts ignored). Admin enable still uses exact fingerprint equality.
+ */
+export function userDateWindowsConflict(
+  candidate: {
+    minDate: string | null;
+    maxDate: string | null;
+    currentAppointmentDate: string | null;
+    visaFingerprint: string | null;
+  },
+  other: {
+    minDate: string | null;
+    maxDate: string | null;
+    currentAppointmentDate: string | null;
+    visaFingerprint: string | null;
+    name: string;
+  },
+): boolean {
+  const window = profileSearchWindow(candidate);
+  const otherWindow = profileSearchWindow(other);
+  if (window.kind === "unknown" || otherWindow.kind === "unknown") return false;
+  if (!windowsOverlap(window, otherWindow)) return false;
+  const left = visaClassesFromFingerprint(candidate.visaFingerprint);
+  const right = visaClassesFromFingerprint(other.visaFingerprint);
+  if (!left.length || !right.length) return true;
+  return classSetsIntersect(left, right);
 }

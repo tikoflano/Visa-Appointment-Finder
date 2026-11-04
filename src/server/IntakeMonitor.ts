@@ -222,6 +222,20 @@ export class IntakeMonitor {
           error instanceof Error ? error.message : error,
         );
       }
+      try {
+        await this.notifier.inviteProfile(saved.id);
+        await this.store.recordPortalAudit({
+          profileId: saved.id,
+          actor: "admin",
+          action: "invite_sent",
+          detail: { via: "intake" },
+        });
+      } catch (error) {
+        console.warn(
+          `Portal invite not sent for profile ${saved.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
       return true;
     } catch (error) {
       if (!(error instanceof ValidationError)) throw error;

@@ -134,6 +134,7 @@ Environment variables `run.sh` honors when starting the container:
 | `HOST_BIND` | `127.0.0.1` | Address published on the host (`0.0.0.0` to expose on the LAN) |
 | `PORT` | `3000` | Host port mapped to production `visa-ui`’s 3000 |
 | `COOKIE_SECURE` | unset | Set `true` if you terminate TLS in front of the UI |
+| `PUBLIC_BASE_URL` | unset | Origin used in portal invite links when Settings has no Public base URL |
 | `OPENWA` | `1` | Set `0` to start `visa-ui` without the OpenWA sidecar or the `visa` network |
 
 Examples:
@@ -169,7 +170,7 @@ Not included: `README.md`, `db.sqlite`, `secrets/`, and other host-only files. C
 
 ## Using the UI
 
-The table lists every profile: enabled switch, name (with email and **visa classes** fingerprint when known), **current appointment**, remaining **AIS reschedules** (when known), **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and icon actions (run/stop, runs, edit, delete). Current appointment is the booked AIS date when we have one; **none** after a successful check found no booking; **unknown** until a successful run. Visa classes come from the AIS groups page (short codes and counts, e.g. `H1B1×1, H4×4`). Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last. **Hide disabled** (above the table) hides those rows without changing whether they are enabled.
+The table lists every profile: enabled switch, name (with email and **visa classes** fingerprint when known), **current appointment**, remaining **AIS reschedules** (when known), **date window**, notify/reschedule badges, last **result**, last run time, **next run**, and a hamburger **Actions** menu (run/stop, impersonate, portal invite, portal access lock, runs, edit, delete). Current appointment is the booked AIS date when we have one; **none** after a successful check found no booking; **unknown** until a successful run. Visa classes come from the AIS groups page (short codes and counts, e.g. `H1B1×1, H4×4`). Rows are ordered by next run, soonest first; disabled profiles have no next run and sort last. **Hide disabled** (above the table) hides those rows without changing whether they are enabled.
 
 - **New profile** — opens on a name and a WhatsApp phone, with **Send WhatsApp** (spinner and a “Sending message to …” toast while it goes out). That sends a fixed `VISA-PROFILE` reply block plus per-field help (`login_email`, `login_password`, `process_id`, `from`, `to`, `notification_emails`, `notification_phones`). `process_id` is the number from the AIS continue URL after the green Continue button. `to` may be blank or omitted to use the current appointment as the latest date. Notification lists are comma-separated (CSV); the login email and this chat’s number are **not** added unless written in those lists. A non-empty list turns that notify channel on. OpenWA is polled for that chat (including same-account replies stored as outgoing): every minute for 10 minutes, every 5 minutes for the next hour, then hourly until 24 hours. Chat with no `VISA-PROFILE` block is ignored. Pasting the whole prompt is fine as long as the filled block is inside it. A block with the wrong field names or bad values gets a WhatsApp reply naming the problem, and polling continues. A valid reply fills the profile, tells that phone it is waiting for an admin to enable it, and stops the watch. That confirmation is retried until it is sent, and it is skipped if an admin enables the profile first. After 24 hours the watch stops and a notice goes to that phone and to the admin email and WhatsApp destinations. The row stays in the table under the name as waiting/stopped; the **Actions** column stays **none** until notify destinations are set. It cannot be enabled or run until details are saved. **Resend WhatsApp** starts a new 24-hour window. Deleting the row cancels its poll immediately. **Manually create** in the same dialog opens the full form (visa account email/password, process ID, date window, notify and/or reschedule) and saves a completed profile immediately. Editing a completed profile is that same full form. Toolbar buttons are icons (new profile, all runs, calendar, notifications, settings, sign out). Edit an existing profile to use **Send test notification** (see below).
 - **Enabled** — when on, that profile is checked on the global interval. Leave new profiles off until you have reviewed them. Turning enable **on** always runs a scrape-only AIS probe first (login, booked date, visa-class fingerprint) and only then enables. Overlapping date windows are allowed when visa fingerprints differ; enable is refused when another enabled profile shares both the date window and the same fingerprint. An empty latest date needs a booked appointment from that probe (or a set latest date).
@@ -231,15 +232,34 @@ To send mail you need a Gmail **App Password**:
 
 A filled-in latest date is inclusive. An empty latest date is exclusive of the booked appointment, so you do not match the slot you already have. Overlap checks use the stored booked date for empty latest windows.
 
+**Admin enable** refuses only when the date window overlaps another **enabled** profile with the **same visa fingerprint** (class codes and counts). Different counts (e.g. `H4×2` vs `H4×4`) may share days.
+
+**User portal date edits** are stricter: any shared visa **class** (counts ignored) with an overlapping enabled profile is refused.
+
+## User portal
+
+End users do not create profiles. After a profile has a visa account email (manual create or WhatsApp intake), the server can send a **portal invite** (email and/or WhatsApp) with a link to set a portal password. Login uses that **AIS visa email** plus the portal password.
+
+Users can:
+
+- Confirm the profile is configured (enabled, booked date, visa classes, reschedule remaining/maximum, search window, last/next run)
+- Browse their recent runs (no debug output)
+- Change **earliest** / **latest** search dates (stricter overlap rule above)
+- Update the **AIS bot password**
+
+Admin extras on each profile row: **Send/resend portal invite**, **Impersonate** (same UI and write rules as the user; banner shows who you are viewing; edits are real), **Disable/enable portal access** (blocks user login/register; impersonation still works and shows “This account is disabled”). **Portal audit** (toolbar) lists logins, failures, register, logout, date/password changes, invites, access toggles, and impersonation start/stop (180-day retention). Set **Public base URL** in Settings (or `PUBLIC_BASE_URL`) so invite links are absolute; if empty, invites use the admin request host.
+
 ## What is stored in SQLite
 
-**profile** — one row per visa account: name, email, encrypted password, process ID, notify emails, WhatsApp destinations, min/max dates, last-seen booked appointment, actions (`notify`, `reschedule`), enabled flag. A WhatsApp intake row also stores the contact phone and whether it is `pending`, `expired`, or `ready`. Pending rows have no visa email, password, or process ID yet.
+**profile** — one row per visa account: name, email, encrypted password, process ID, notify emails, WhatsApp destinations, min/max dates, last-seen booked appointment, actions (`notify`, `reschedule`), enabled flag, portal password hash / invite token / registered-at / access-enabled. A WhatsApp intake row also stores the contact phone and whether it is `pending`, `expired`, or `ready`. Pending rows have no visa email, password, or process ID yet.
 
-**setting** — Gmail user, encrypted Gmail app password, admin notification emails, email/WhatsApp channel enabled flags, OpenWA session id, admin WhatsApp numbers, check interval, heartbeat enabled flag, heartbeat time UTC (`HH:MM`, default `00:00`), concurrency, run timeout, failure alarm threshold, bot debug flag, admin password hash, key-check ciphertext, plus short-lived heartbeat attempt metadata for daily-slot retries.
+**setting** — Gmail user, encrypted Gmail app password, admin notification emails, email/WhatsApp channel enabled flags, OpenWA session id, admin WhatsApp numbers, check interval, heartbeat enabled flag, heartbeat time UTC (`HH:MM`, default `00:00`), concurrency, run timeout, failure alarm threshold, bot debug flag, public base URL for invites, admin password hash, key-check ciphertext, plus short-lived heartbeat attempt metadata for daily-slot retries.
 
 **run** — each scheduler/manual execution. **status** is process-level: `running`, `success`, `failed`, `timeout`, `cancelled`, or `interrupted`. **result** is the parsed `VISA_RESULT` JSON when the child printed one; its **outcome** is `none` (UI: none available), `available`, or `error`. Timestamps and debug output (only if that was on) are stored too. Old rows are pruned after 14 days.
 
-**notification** — each appointment, heartbeat, failure-alarm, or test (Settings or profile) on email or WhatsApp (recipients, subject, summary, status `sent` / `failed` / `skipped`, channel).
+**notification** — each appointment, heartbeat, failure-alarm, test, intake, or portal invite on email or WhatsApp (recipients, subject, summary, status `sent` / `failed` / `skipped`, channel).
+
+**portal_audit** — user/admin portal events (login, register, date and AIS password changes, impersonation, access enable/disable, invites). Pruned after 180 days with run maintenance.
 
 `HOST_BIND` / `PORT` / `COOKIE_SECURE` for `./run.sh` are listed under [`run.sh` commands](#runsh-commands). The Node process inside the container also understands:
 
@@ -259,6 +279,7 @@ A filled-in latest date is inclusive. An empty latest date is exclusive of the b
 | `VITE_DEV_PORT` | `5173` | Host port published from the `visa-dev` Vite UI (open this in the browser) |
 | `HOST_BIND` | `127.0.0.1` | Address Docker publishes on the host |
 | `COOKIE_SECURE` | unset | Set `true` behind HTTPS |
+| `PUBLIC_BASE_URL` | unset | Absolute origin for portal invite links (no trailing slash). Settings **Public base URL** overrides when set |
 
 ## Local npm scripts
 

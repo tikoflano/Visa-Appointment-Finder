@@ -212,35 +212,79 @@ tr.intake.stopped {
   background: #f4f6f8;
 }
 
+.col-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: middle;
+}
+
 .row-actions {
   flex-wrap: nowrap;
   gap: 2px;
+  justify-content: flex-end;
 }
 
-.row-actions sl-icon-button {
-  font-size: 18px;
+.row-actions .row-action-trigger {
+  font-size: 20px;
+  color: var(--muted);
 }
 
-.row-actions sl-icon-button.play {
+.row-actions .row-action-trigger:hover,
+.row-actions .row-action-trigger:focus-visible {
+  color: var(--text);
+}
+
+.row-actions-menu::part(panel) {
+  z-index: 40;
+  min-width: 220px;
+}
+
+.row-actions-menu sl-menu-item::part(base) {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+}
+
+.row-actions-menu sl-menu-item::part(checked-icon) {
+  display: none;
+}
+
+.row-actions-menu sl-menu-item::part(prefix) {
+  flex: 0 0 auto;
+  min-width: 1.25em;
+}
+
+.row-actions-menu sl-menu-item::part(label) {
+  flex: 0 1 auto;
+  text-align: left;
+}
+
+.row-actions-menu sl-menu-item::part(suffix) {
+  display: none;
+}
+
+.row-actions-menu sl-menu-item sl-icon {
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.row-actions-menu sl-menu-item.play sl-icon {
   color: var(--ok);
 }
 
-.row-actions sl-icon-button.stop,
-.row-actions sl-icon-button.danger {
-  color: var(--bad);
-}
-
-.row-actions sl-icon-button.history {
+.row-actions-menu sl-menu-item.history sl-icon {
   color: var(--info);
 }
 
-.row-actions sl-icon-button.edit {
+.row-actions-menu sl-menu-item.edit sl-icon {
   color: var(--warn);
 }
 
-.row-actions sl-icon-button:hover,
-.row-actions sl-icon-button:focus-visible {
-  filter: brightness(0.78);
+.row-actions-menu sl-menu-item.danger sl-icon,
+.row-actions-menu sl-menu-item.danger::part(label) {
+  color: var(--bad);
 }
 
 .label-text {
@@ -897,6 +941,111 @@ pre[data-output] {
   font-size: 12px;
 }
 
+.login-mode-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.user-portal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1.1fr);
+  gap: 20px;
+  align-items: start;
+  max-width: 1180px;
+}
+
+.user-portal-main {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.user-portal-side {
+  min-width: 0;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+}
+
+.user-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.user-panel h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.user-status {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.user-status h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.user-status > .sub {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.user-status .status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px 16px;
+  margin-top: 12px;
+}
+
+.user-status dt,
+.user-status .status-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.user-status dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+.user-status .status-edit {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.user-status .status-edit:hover,
+.user-status .status-edit:focus-visible {
+  color: var(--primary);
+}
+
+@media (max-width: 900px) {
+  .user-portal {
+    grid-template-columns: 1fr;
+  }
+
+  .user-portal-side {
+    position: static;
+    max-height: none;
+  }
+}
+
 @media (max-width: 720px) {
   .hero-inner {
     flex-wrap: wrap;
@@ -907,7 +1056,8 @@ pre[data-output] {
     padding: 16px;
   }
 
-  #login-view {
+  #login-view,
+  #register-view {
     padding-top: 20px;
   }
 }

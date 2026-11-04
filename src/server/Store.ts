@@ -6,6 +6,8 @@ import {
   BotResult,
   normalizeBotResult,
   profileSearchWindow,
+  userDateWindowsConflict,
+  visaClassesFromFingerprint,
   windowsOverlap,
   type RescheduleLimit,
 } from "../botResult";
@@ -23,6 +25,9 @@ type Db = Database<sqlite3.Database, sqlite3.Statement>;
 const KEY_CHECK_PLAINTEXT = "visa-appointment-finder";
 const RUN_OUTPUT_LIMIT = 64 * 1024;
 const RUN_RETENTION_DAYS = 14;
+const PORTAL_AUDIT_RETENTION_DAYS = 180;
+const PORTAL_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PORTAL_PASSWORD_MIN = 10;
 
 export interface ProfileInput {
   name: string;
@@ -62,8 +67,51 @@ export interface Profile
   visaFingerprint: string | null;
   rescheduleRemaining: number | null;
   rescheduleMaximum: number | null;
+  /** Portal login registered (has portal password). */
+  portalRegistered: boolean;
+  portalRegisteredAt: string | null;
+  /** When false, user login/register are blocked; impersonation still works. */
+  portalAccessEnabled: boolean;
+  /** Non-null when an unused invite is still valid. */
+  portalInviteExpiresAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type PortalAuditActor = "user" | "admin_impersonation" | "admin";
+export type PortalAuditAction =
+  | "login_success"
+  | "login_failure"
+  | "register"
+  | "logout"
+  | "update_dates"
+  | "update_visa_password"
+  | "update_portal_password"
+  | "impersonate_start"
+  | "impersonate_stop"
+  | "portal_access_enabled"
+  | "portal_access_disabled"
+  | "invite_sent";
+
+export interface PortalAuditInput {
+  profileId?: number | null;
+  actor: PortalAuditActor;
+  action: PortalAuditAction;
+  detail?: Record<string, unknown> | null;
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+export interface PortalAuditRecord {
+  id: number;
+  createdAt: string;
+  profileId: number | null;
+  profileName: string | null;
+  actor: PortalAuditActor;
+  action: PortalAuditAction;
+  detail: Record<string, unknown> | null;
+  ip: string | null;
+  userAgent: string | null;
 }
 
 export interface Settings {
@@ -84,6 +132,7 @@ export interface Settings {
   runTimeoutMinutes: number;
   failureAlarmThreshold: number;
   botDebug: boolean;
+  publicBaseUrl: string;
 }
 
 export interface SettingsInput
@@ -94,12 +143,15 @@ export interface SettingsInput
     | "lastHeartbeatAt"
     | "heartbeatMinutes"
     | "heartbeatTimeUtc"
+    | "publicBaseUrl"
   > {
   gmailAppPassword?: string;
   /** Kept for older clients. Scheduling uses heartbeatTimeUtc instead. */
   heartbeatMinutes?: number;
   /** HH:MM in UTC. Empty or omitted keeps the stored value; blank string stores 00:00. */
   heartbeatTimeUtc?: string;
+  /** Public URL for invite links. Omitted keeps the stored value. */
+  publicBaseUrl?: string;
 }
 
 export type NotificationKind =
@@ -107,7 +159,8 @@ export type NotificationKind =
   | "heartbeat"
   | "failure"
   | "test"
-  | "intake";
+  | "intake"
+  | "invite";
 export type NotificationStatus = "sent" | "failed" | "skipped";
 
 export interface NotificationInput {
@@ -226,7 +279,32 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   run_timeout_minutes: "5",
   failure_alarm_threshold: "3",
   bot_debug: "0",
+  public_base_url: "",
 };
+
+function hashScryptPassword(password: string): string {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64);
+  return `scrypt:${salt.toString("base64")}:${hash.toString("base64")}`;
+}
+
+function verifyScryptPassword(stored: string, password: string): boolean {
+  const parts = stored.split(":");
+  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  const [, salt, hash] = parts;
+  try {
+    const expected = Buffer.from(hash, "base64");
+    const actual = crypto.scryptSync(password, Buffer.from(salt, "base64"), 64);
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+
+function hashInviteToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("base64url");
+}
 
 const profileSecretContext = (id: number) => `profile:${id}:visa_password`;
 const GMAIL_SECRET_CONTEXT = "setting:gmail_app_password";
@@ -335,6 +413,22 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS profile_process_idx
         ON profile (visa_process_id);
       CREATE INDEX IF NOT EXISTS notification_sent_idx ON notification (id DESC);
+
+      CREATE TABLE IF NOT EXISTS portal_audit (
+        id INTEGER PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        profile_id INTEGER,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT,
+        ip TEXT,
+        user_agent TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS portal_audit_created_idx
+        ON portal_audit (id DESC);
+      CREATE INDEX IF NOT EXISTS portal_audit_profile_idx
+        ON portal_audit (profile_id, id DESC);
     `);
 
     const profileColumns: { name: string }[] = await this.db.all(
@@ -422,6 +516,32 @@ export class Store {
       "intake_confirmed",
       "intake_confirmed INTEGER NOT NULL DEFAULT 1",
     );
+    await ensureColumn("portal_password_hash", "portal_password_hash TEXT");
+    await ensureColumn(
+      "portal_invite_token_hash",
+      "portal_invite_token_hash TEXT",
+    );
+    await ensureColumn(
+      "portal_invite_expires_at",
+      "portal_invite_expires_at TEXT",
+    );
+    await ensureColumn("portal_registered_at", "portal_registered_at TEXT");
+    await ensureColumn(
+      "portal_access_enabled",
+      "portal_access_enabled INTEGER NOT NULL DEFAULT 1",
+    );
+    try {
+      await this.db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS profile_visa_email_idx
+          ON profile (visa_email)
+          WHERE visa_email IS NOT NULL AND visa_email != ''
+      `);
+    } catch (error) {
+      console.warn(
+        "Could not create unique visa_email index (duplicate emails may exist):",
+        error instanceof Error ? error.message : error,
+      );
+    }
     await this.relaxProfileVisaColumns();
 
     const runColumns: { name: string }[] = await this.db.all(
@@ -583,6 +703,10 @@ export class Store {
       runTimeoutMinutes: Number(await this.getSetting("run_timeout_minutes")),
       failureAlarmThreshold: Number(await this.getSetting("failure_alarm_threshold")),
       botDebug: (await this.getSetting("bot_debug")) === "1",
+      publicBaseUrl:
+        (await this.getRawSetting("public_base_url"))?.trim() ||
+        process.env.PUBLIC_BASE_URL?.trim() ||
+        "",
     };
   }
 
@@ -657,6 +781,12 @@ export class Store {
       positiveInt(input.failureAlarmThreshold, "Failure alarm"),
     );
     await this.setRawSetting("bot_debug", input.botDebug ? "1" : "0");
+    if (input.publicBaseUrl !== undefined) {
+      await this.setRawSetting(
+        "public_base_url",
+        String(input.publicBaseUrl ?? "").trim().replace(/\/$/, ""),
+      );
+    }
     if (input.gmailAppPassword) {
       await this.setRawSetting(
         "gmail_app_password",
@@ -693,26 +823,18 @@ export class Store {
   }
 
   async setAdminPassword(password: string): Promise<void> {
-    if (password.length < 10) {
-      throw new ValidationError("Password must be at least 10 characters");
+    if (password.length < PORTAL_PASSWORD_MIN) {
+      throw new ValidationError(
+        `Password must be at least ${PORTAL_PASSWORD_MIN} characters`,
+      );
     }
-    const salt = crypto.randomBytes(16);
-    const hash = crypto.scryptSync(password, salt, 64);
-    await this.setRawSetting(
-      "admin_password_hash",
-      `scrypt:${salt.toString("base64")}:${hash.toString("base64")}`,
-    );
+    await this.setRawSetting("admin_password_hash", hashScryptPassword(password));
   }
 
   async verifyAdminPassword(password: string): Promise<boolean> {
     const stored = await this.getRawSetting("admin_password_hash");
-    if (!stored) {
-      return false;
-    }
-    const [, salt, hash] = stored.split(":");
-    const expected = Buffer.from(hash, "base64");
-    const actual = crypto.scryptSync(password, Buffer.from(salt, "base64"), 64);
-    return crypto.timingSafeEqual(expected, actual);
+    if (!stored) return false;
+    return verifyScryptPassword(stored, password);
   }
 
   // ---- Profiles ----
@@ -759,6 +881,12 @@ export class Store {
       rescheduleRemaining: integerOrNull(row.reschedule_remaining),
       rescheduleMaximum: integerOrNull(row.reschedule_maximum),
       hasPassword: !!row.visa_password_enc,
+      portalRegistered: !!row.portal_password_hash,
+      portalRegisteredAt: row.portal_registered_at ?? null,
+      portalAccessEnabled: row.portal_access_enabled == null
+        ? true
+        : !!row.portal_access_enabled,
+      portalInviteExpiresAt: row.portal_invite_expires_at ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -893,6 +1021,47 @@ export class Store {
     if (names.length) {
       throw new ValidationError(
         `Date window overlaps enabled profile${names.length > 1 ? "s" : ""} ${names.join(", ")} with the same visa classes (${candidate.visaFingerprint}).`,
+      );
+    }
+  }
+
+  /**
+   * Stricter than assertCanEnable: any shared visa class (ignoring counts)
+   * with an overlapping enabled peer is refused.
+   */
+  async assertUserCanUpdateDates(candidate: {
+    id: number;
+    minDate: string | null;
+    maxDate: string | null;
+    currentAppointmentDate: string | null;
+    visaFingerprint: string | null;
+  }): Promise<void> {
+    const window = profileSearchWindow(candidate);
+    if (window.kind === "unknown") {
+      throw new ValidationError(
+        "No booked appointment on AIS and no latest date set. Set a latest date, or book an appointment first.",
+      );
+    }
+    if (!candidate.visaFingerprint) {
+      throw new ValidationError(
+        "Visa class fingerprint is missing. Wait for a successful bot check, or ask an admin to enable the profile once.",
+      );
+    }
+    const others = (await this.listProfiles()).filter(
+      (profile) => profile.enabled && profile.id !== candidate.id,
+    );
+    const names: string[] = [];
+    for (const other of others) {
+      if (userDateWindowsConflict(candidate, other)) {
+        names.push(other.name);
+      }
+    }
+    if (names.length) {
+      const classes = visaClassesFromFingerprint(candidate.visaFingerprint).join(
+        ", ",
+      );
+      throw new ValidationError(
+        `Date window overlaps enabled profile${names.length > 1 ? "s" : ""} ${names.join(", ")} that share visa class${classes.includes(",") ? "es" : ""} (${classes || candidate.visaFingerprint}).`,
       );
     }
   }
@@ -1238,6 +1407,10 @@ export class Store {
       "UPDATE notification SET profile_id = NULL, run_id = NULL WHERE profile_id = ?",
       [id],
     );
+    await this.db.run(
+      "UPDATE portal_audit SET profile_id = NULL WHERE profile_id = ?",
+      [id],
+    );
     await this.db.run("DELETE FROM profile WHERE id = ?", [id]);
   }
 
@@ -1248,9 +1421,363 @@ export class Store {
           "A profile with that visa process ID already exists",
         );
       }
+      if (error.message.includes("visa_email")) {
+        return new ValidationError(
+          "A profile with that visa account email already exists",
+        );
+      }
       return new ValidationError("A profile with that name already exists");
     }
     return error;
+  }
+
+  // ---- Portal auth & audit ----
+
+  async findProfileByVisaEmail(email: string): Promise<Profile | undefined> {
+    const normalized = String(email ?? "").trim().toLowerCase();
+    if (!normalized) return undefined;
+    const row = await this.db.get(
+      "SELECT * FROM profile WHERE lower(trim(visa_email)) = ?",
+      [normalized],
+    );
+    return row ? this.toProfile(row) : undefined;
+  }
+
+  async findProfileByInviteToken(token: string): Promise<Profile | undefined> {
+    const raw = String(token ?? "").trim();
+    if (!raw) return undefined;
+    const hash = hashInviteToken(raw);
+    const row = await this.db.get(
+      `SELECT * FROM profile
+       WHERE portal_invite_token_hash = ?
+         AND portal_invite_expires_at IS NOT NULL
+         AND portal_invite_expires_at >= ?`,
+      [hash, new Date().toISOString()],
+    );
+    return row ? this.toProfile(row) : undefined;
+  }
+
+  /**
+   * Create a fresh invite token. Returns the plaintext token once.
+   * Clears any previous unused invite.
+   */
+  async createPortalInvite(profileId: number): Promise<{
+    token: string;
+    expiresAt: string;
+    profile: Profile;
+  }> {
+    const profile = await this.getProfile(profileId);
+    if (!profile) throw new ValidationError("Profile not found");
+    if (profile.intakeStatus !== "ready") {
+      throw new ValidationError(
+        "Profile must be complete before inviting the user",
+      );
+    }
+    if (!profile.visaEmail) {
+      throw new ValidationError("Visa account email is required for portal invite");
+    }
+    if (!profile.portalAccessEnabled) {
+      throw new ValidationError("Portal access is disabled for this profile");
+    }
+    const other = await this.findProfileByVisaEmail(profile.visaEmail);
+    if (other && other.id !== profile.id) {
+      throw new ValidationError(
+        "Another profile already uses this visa account email",
+      );
+    }
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + PORTAL_INVITE_TTL_MS).toISOString();
+    await this.db.run(
+      `UPDATE profile SET
+         portal_invite_token_hash = ?,
+         portal_invite_expires_at = ?,
+         updated_at = ?
+       WHERE id = ?`,
+      [hashInviteToken(token), expiresAt, new Date().toISOString(), profileId],
+    );
+    return {
+      token,
+      expiresAt,
+      profile: (await this.getProfile(profileId))!,
+    };
+  }
+
+  async registerPortalUser(
+    token: string,
+    password: string,
+  ): Promise<Profile> {
+    if (password.length < PORTAL_PASSWORD_MIN) {
+      throw new ValidationError(
+        `Password must be at least ${PORTAL_PASSWORD_MIN} characters`,
+      );
+    }
+    const profile = await this.findProfileByInviteToken(token);
+    if (!profile) {
+      throw new ValidationError("Invite link is invalid or expired");
+    }
+    if (!profile.portalAccessEnabled) {
+      throw new ValidationError("Portal access is disabled for this account");
+    }
+    const now = new Date().toISOString();
+    await this.db.run(
+      `UPDATE profile SET
+         portal_password_hash = ?,
+         portal_registered_at = COALESCE(portal_registered_at, ?),
+         portal_invite_token_hash = NULL,
+         portal_invite_expires_at = NULL,
+         updated_at = ?
+       WHERE id = ?`,
+      [hashScryptPassword(password), now, now, profile.id],
+    );
+    return (await this.getProfile(profile.id))!;
+  }
+
+  async verifyPortalLogin(
+    email: string,
+    password: string,
+  ): Promise<Profile> {
+    const profile = await this.findProfileByVisaEmail(email);
+    if (!profile || !profile.portalRegistered) {
+      throw new ValidationError("Wrong email or password");
+    }
+    if (!profile.portalAccessEnabled) {
+      throw new ValidationError("Portal access is disabled for this account");
+    }
+    const row = await this.db.get<{ portal_password_hash: string }>(
+      "SELECT portal_password_hash FROM profile WHERE id = ?",
+      [profile.id],
+    );
+    if (
+      !row?.portal_password_hash ||
+      !verifyScryptPassword(row.portal_password_hash, password)
+    ) {
+      throw new ValidationError("Wrong email or password");
+    }
+    return profile;
+  }
+
+  async setPortalAccessEnabled(
+    profileId: number,
+    enabled: boolean,
+  ): Promise<Profile> {
+    const profile = await this.getProfile(profileId);
+    if (!profile) throw new ValidationError("Profile not found");
+    await this.db.run(
+      "UPDATE profile SET portal_access_enabled = ?, updated_at = ? WHERE id = ?",
+      [enabled ? 1 : 0, new Date().toISOString(), profileId],
+    );
+    return (await this.getProfile(profileId))!;
+  }
+
+  async updateUserDates(
+    profileId: number,
+    minDate: string | null,
+    maxDate: string | null,
+  ): Promise<Profile> {
+    const existing = await this.getProfile(profileId);
+    if (!existing) throw new ValidationError("Profile not found");
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const nextMin = minDate || null;
+    const nextMax = maxDate || null;
+    for (const date of [nextMin, nextMax]) {
+      if (date && (!isoDate.test(date) || isNaN(+new Date(date)))) {
+        throw new ValidationError(`Invalid date: ${date}`);
+      }
+    }
+    if (nextMin && nextMax && nextMin > nextMax) {
+      throw new ValidationError("Min date must be on or before max date");
+    }
+    await this.assertUserCanUpdateDates({
+      id: profileId,
+      minDate: nextMin,
+      maxDate: nextMax,
+      currentAppointmentDate: existing.currentAppointmentDate,
+      visaFingerprint: existing.visaFingerprint,
+    });
+    await this.db.run(
+      "UPDATE profile SET min_date = ?, max_date = ?, updated_at = ? WHERE id = ?",
+      [nextMin, nextMax, new Date().toISOString(), profileId],
+    );
+    return (await this.getProfile(profileId))!;
+  }
+
+  async updateUserVisaPassword(
+    profileId: number,
+    visaPassword: string,
+  ): Promise<Profile> {
+    const existing = await this.getProfile(profileId);
+    if (!existing) throw new ValidationError("Profile not found");
+    if (!String(visaPassword ?? "").trim()) {
+      throw new ValidationError("Visa account password is required");
+    }
+    await this.db.run(
+      "UPDATE profile SET visa_password_enc = ?, updated_at = ? WHERE id = ?",
+      [
+        this.box.encrypt(visaPassword, profileSecretContext(profileId)),
+        new Date().toISOString(),
+        profileId,
+      ],
+    );
+    return (await this.getProfile(profileId))!;
+  }
+
+  /**
+   * Change the portal login password. Real users must supply the current
+   * password; admin impersonation may set a new one without it.
+   */
+  async updatePortalPassword(
+    profileId: number,
+    options: {
+      currentPassword?: string;
+      newPassword: string;
+      requireCurrent: boolean;
+    },
+  ): Promise<Profile> {
+    const existing = await this.getProfile(profileId);
+    if (!existing) throw new ValidationError("Profile not found");
+    if (!existing.portalRegistered) {
+      throw new ValidationError(
+        "Complete portal registration before changing this password",
+      );
+    }
+    const next = String(options.newPassword ?? "");
+    if (next.length < PORTAL_PASSWORD_MIN) {
+      throw new ValidationError(
+        `Password must be at least ${PORTAL_PASSWORD_MIN} characters`,
+      );
+    }
+    const row = await this.db.get<{ portal_password_hash: string }>(
+      "SELECT portal_password_hash FROM profile WHERE id = ?",
+      [profileId],
+    );
+    if (!row?.portal_password_hash) {
+      throw new ValidationError("Portal password is not set");
+    }
+    if (options.requireCurrent) {
+      if (
+        !verifyScryptPassword(
+          row.portal_password_hash,
+          String(options.currentPassword ?? ""),
+        )
+      ) {
+        throw new ValidationError("Current password is incorrect");
+      }
+    }
+    await this.db.run(
+      `UPDATE profile SET portal_password_hash = ?, updated_at = ? WHERE id = ?`,
+      [hashScryptPassword(next), new Date().toISOString(), profileId],
+    );
+    return (await this.getProfile(profileId))!;
+  }
+
+  /** Safe fields for the end-user portal (no destinations, secrets, etc.). */
+  toUserPortalView(profile: Profile): Record<string, unknown> {
+    return {
+      id: profile.id,
+      name: profile.name,
+      visaEmail: profile.visaEmail,
+      enabled: profile.enabled,
+      intakeStatus: profile.intakeStatus,
+      hasPassword: profile.hasPassword,
+      minDate: profile.minDate,
+      maxDate: profile.maxDate,
+      currentAppointmentDate: profile.currentAppointmentDate,
+      visaFingerprint: profile.visaFingerprint,
+      visaClasses: visaClassesFromFingerprint(profile.visaFingerprint),
+      rescheduleRemaining: profile.rescheduleRemaining,
+      rescheduleMaximum: profile.rescheduleMaximum,
+      portalAccessEnabled: profile.portalAccessEnabled,
+      portalRegistered: profile.portalRegistered,
+    };
+  }
+
+  async recordPortalAudit(input: PortalAuditInput): Promise<void> {
+    await this.db.run(
+      `INSERT INTO portal_audit
+         (created_at, profile_id, actor, action, detail, ip, user_agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        new Date().toISOString(),
+        input.profileId ?? null,
+        input.actor,
+        input.action,
+        input.detail ? JSON.stringify(input.detail) : null,
+        input.ip ?? null,
+        input.userAgent ?? null,
+      ],
+    );
+  }
+
+  async listPortalAudit(
+    limit: number,
+    filters: {
+      profileId?: number | null;
+      action?: string | null;
+      from?: string;
+      to?: string;
+    } = {},
+  ): Promise<PortalAuditRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filters.profileId != null) {
+      clauses.push("a.profile_id = ?");
+      params.push(filters.profileId);
+    }
+    if (filters.action) {
+      clauses.push("a.action = ?");
+      params.push(filters.action);
+    }
+    if (filters.from) {
+      clauses.push("a.created_at >= ?");
+      params.push(filters.from);
+    }
+    if (filters.to) {
+      clauses.push("a.created_at <= ?");
+      params.push(filters.to);
+    }
+    params.push(limit);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.db.all(
+      `SELECT a.*, p.name AS profile_name
+       FROM portal_audit a
+       LEFT JOIN profile p ON p.id = a.profile_id
+       ${where}
+       ORDER BY a.id DESC
+       LIMIT ?`,
+      params,
+    );
+    return rows.map((row) => this.toPortalAudit(row));
+  }
+
+  private toPortalAudit(row: any): PortalAuditRecord {
+    let detail: Record<string, unknown> | null = null;
+    if (row.detail) {
+      try {
+        detail = JSON.parse(row.detail);
+      } catch {
+        detail = { raw: String(row.detail) };
+      }
+    }
+    return {
+      id: row.id,
+      createdAt: row.created_at,
+      profileId: row.profile_id ?? null,
+      profileName: row.profile_name ?? null,
+      actor: row.actor,
+      action: row.action,
+      detail,
+      ip: row.ip ?? null,
+      userAgent: row.user_agent ?? null,
+    };
+  }
+
+  async prunePortalAudit(): Promise<void> {
+    const cutoff = new Date(
+      Date.now() - PORTAL_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    await this.db.run("DELETE FROM portal_audit WHERE created_at < ?", [
+      cutoff,
+    ]);
   }
 
   // ---- Runs & logs ----
@@ -1295,6 +1822,7 @@ export class Store {
       Date.now() - RUN_RETENTION_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
     await this.db.run("DELETE FROM run WHERE started_at < ?", [cutoff]);
+    await this.prunePortalAudit();
   }
 
   async getLatestRuns(): Promise<Map<number, Run>> {

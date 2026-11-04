@@ -6,8 +6,12 @@ import "@shoelace-style/shoelace/dist/components/button/button.js";
 import "@shoelace-style/shoelace/dist/components/card/card.js";
 import "@shoelace-style/shoelace/dist/components/checkbox/checkbox.js";
 import "@shoelace-style/shoelace/dist/components/dialog/dialog.js";
+import "@shoelace-style/shoelace/dist/components/dropdown/dropdown.js";
+import "@shoelace-style/shoelace/dist/components/icon/icon.js";
 import "@shoelace-style/shoelace/dist/components/icon-button/icon-button.js";
 import "@shoelace-style/shoelace/dist/components/input/input.js";
+import "@shoelace-style/shoelace/dist/components/menu/menu.js";
+import "@shoelace-style/shoelace/dist/components/menu-item/menu-item.js";
 import "@shoelace-style/shoelace/dist/components/option/option.js";
 import "@shoelace-style/shoelace/dist/components/select/select.js";
 import "@shoelace-style/shoelace/dist/components/switch/switch.js";
@@ -34,6 +38,11 @@ let confirmResolve;
 /** Profile ids currently waiting on an enable-time AIS probe. */
 const probingIds = new Set();
 
+let loginMode = "user";
+let sessionRole = null;
+let impersonating = false;
+let registerToken = "";
+
 async function api(method, url, body) {
   const response = await fetch(url, {
     method,
@@ -41,7 +50,14 @@ async function api(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && url !== "/api/login") {
+  const authExempt =
+    url === "/api/login" ||
+    url === "/api/user/login" ||
+    url === "/api/user/register" ||
+    url.startsWith("/api/user/invite") ||
+    url === "/api/session" ||
+    url === "/api/setup";
+  if (response.status === 401 && !authExempt) {
     showLogin();
   }
   if (!response.ok) {
@@ -358,18 +374,60 @@ function formatDuration(ms) {
 
 // ---- Session ----
 
+function parseHashRoute() {
+  const hash = location.hash.replace(/^#/, "");
+  if (hash.startsWith("/register")) {
+    const query = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+    return {
+      name: "register",
+      token: new URLSearchParams(query).get("token") || "",
+    };
+  }
+  return { name: "app", token: "" };
+}
+
 async function boot() {
+  const route = parseHashRoute();
+  if (route.name === "register" && route.token) {
+    await showRegister(route.token);
+    return;
+  }
   const session = await api("GET", "/api/session");
   if (session.authenticated) {
-    showApp(session.dev);
+    await applySession(session);
   } else {
     showLogin(session.setupRequired);
   }
 }
 
+async function applySession(session) {
+  sessionRole = session.role;
+  impersonating = !!session.impersonating;
+  if (session.role === "user" || session.impersonating) {
+    showUserPortal(session);
+  } else {
+    showApp(session.dev);
+  }
+}
+
+function setLoginMode(mode) {
+  loginMode = mode;
+  const userBtn = $("#login-mode-user");
+  const adminBtn = $("#login-mode-admin");
+  userBtn.variant = mode === "user" ? "primary" : "default";
+  adminBtn.variant = mode === "admin" ? "primary" : "default";
+  const email = $("#login-email");
+  email.hidden = mode !== "user";
+  email.required = mode === "user";
+  named($("#login-form"), "password").label =
+    mode === "admin" ? "Admin password" : "Portal password";
+}
+
 function showLogin(setupRequired) {
   clearInterval(refreshTimer);
   $("#app-view").hidden = true;
+  $("#user-view").hidden = true;
+  $("#register-view").hidden = true;
   $("#app-toolbar").hidden = true;
   $("#login-view").hidden = false;
   document.body.classList.add("is-login");
@@ -377,24 +435,105 @@ function showLogin(setupRequired) {
   setupMode = !!setupRequired;
   $("#setup-hint").hidden = !setupMode;
   $("#confirm-row").hidden = !setupMode;
+  $("#login-mode-row").hidden = !!setupMode;
   $(".login-title").textContent = setupMode ? "Create password" : "Sign in";
   $("#login-submit").textContent = setupMode ? "Create password" : "Sign in";
   const form = $("#login-form");
   named(form, "password").autocomplete = setupMode ? "new-password" : "current-password";
   named(form, "confirm").required = setupMode;
+  if (setupMode) {
+    setLoginMode("admin");
+    $("#login-email").hidden = true;
+    $("#login-email").required = false;
+  } else {
+    setLoginMode(loginMode);
+  }
+}
+
+function hideAuthViews() {
+  $("#login-view").hidden = true;
+  $("#register-view").hidden = true;
+  document.body.classList.remove("is-login");
 }
 
 function showApp(dev) {
-  $("#login-view").hidden = true;
+  hideAuthViews();
+  $("#user-view").hidden = true;
   $("#app-view").hidden = false;
   $("#app-toolbar").hidden = false;
   document.body.classList.add("is-app");
-  document.body.classList.remove("is-login");
   setBanner("#dev-banner", !!dev);
+  for (const id of [
+    "#new-profile",
+    "#open-all-runs",
+    "#open-calendar",
+    "#open-notifications",
+    "#open-portal-audit",
+    "#open-settings",
+  ]) {
+    const node = $(id)?.closest("sl-tooltip") || $(id);
+    if (node) node.hidden = false;
+  }
   refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
 }
+
+function showUserPortal(session) {
+  hideAuthViews();
+  $("#app-view").hidden = true;
+  $("#user-view").hidden = false;
+  $("#app-toolbar").hidden = false;
+  document.body.classList.add("is-app");
+  for (const id of [
+    "#new-profile",
+    "#open-all-runs",
+    "#open-calendar",
+    "#open-notifications",
+    "#open-portal-audit",
+    "#open-settings",
+  ]) {
+    const tip = $(id)?.closest("sl-tooltip");
+    if (tip) tip.hidden = true;
+    else if ($(id)) $(id).hidden = true;
+  }
+  const banner = $("#impersonation-banner");
+  const disabledBanner = $("#portal-disabled-banner");
+  if (session.impersonating) {
+    banner.hidden = false;
+    $("#impersonation-banner-text").textContent =
+      `Viewing as ${session.profileName || "user"} (${session.visaEmail || ""})`;
+  } else {
+    banner.hidden = true;
+  }
+  disabledBanner.hidden = !(session.impersonating && session.portalAccessEnabled === false);
+  refreshUserPortal();
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshUserPortal, REFRESH_MS);
+}
+
+async function showRegister(token) {
+  clearInterval(refreshTimer);
+  registerToken = token;
+  $("#app-view").hidden = true;
+  $("#user-view").hidden = true;
+  $("#login-view").hidden = true;
+  $("#app-toolbar").hidden = true;
+  $("#register-view").hidden = false;
+  document.body.classList.add("is-login");
+  document.body.classList.remove("is-app");
+  setError($("#register-form"));
+  try {
+    const info = await api("GET", `/api/user/invite?token=${encodeURIComponent(token)}`);
+    $("#register-identity").textContent = `${info.name} · ${info.visaEmail}`;
+  } catch (error) {
+    $("#register-identity").textContent = "";
+    setError($("#register-form"), error.message);
+  }
+}
+
+$("#login-mode-user").addEventListener("click", () => setLoginMode("user"));
+$("#login-mode-admin").addEventListener("click", () => setLoginMode("admin"));
 
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -406,11 +545,37 @@ $("#login-form").addEventListener("submit", async (event) => {
         throw new Error("Passwords do not match");
       }
       await api("POST", "/api/setup", { password: named(form, "password").value });
-    } else {
+    } else if (loginMode === "admin") {
       await api("POST", "/api/login", { password: named(form, "password").value });
+    } else {
+      await api("POST", "/api/user/login", {
+        email: named(form, "email").value,
+        password: named(form, "password").value,
+      });
     }
     form.reset();
-    showApp();
+    const session = await api("GET", "/api/session");
+    await applySession(session);
+  } catch (error) {
+    setError(form, error.message);
+  }
+});
+
+$("#register-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  setError(form);
+  try {
+    if (named(form, "password").value !== named(form, "confirm").value) {
+      throw new Error("Passwords do not match");
+    }
+    await api("POST", "/api/user/register", {
+      token: registerToken,
+      password: named(form, "password").value,
+    });
+    location.hash = "";
+    const session = await api("GET", "/api/session");
+    await applySession(session);
   } catch (error) {
     setError(form, error.message);
   }
@@ -418,7 +583,214 @@ $("#login-form").addEventListener("submit", async (event) => {
 
 $("#logout").addEventListener("click", async () => {
   await api("POST", "/api/logout", {});
+  sessionRole = null;
+  impersonating = false;
   showLogin(false);
+});
+
+$("#stop-impersonation").addEventListener("click", async () => {
+  try {
+    await api("POST", "/api/admin/stop-impersonation", {});
+    const session = await api("GET", "/api/session");
+    await applySession(session);
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+let userPortalMe = null;
+
+function statusField(label, value, edit) {
+  const title = el("dt", { class: "status-label" }, label);
+  if (edit) {
+    title.append(
+      el("sl-icon-button", {
+        class: "status-edit",
+        name: "pencil",
+        label: edit.label,
+        onclick: edit.onClick,
+      }),
+    );
+  }
+  return el("div", { class: "status-field" }, title, el("dd", {}, value));
+}
+
+function openUserDatesDialog() {
+  const form = $("#user-dates-form");
+  setError(form);
+  named(form, "minDate").value = userPortalMe?.minDate || "";
+  named(form, "maxDate").value = userPortalMe?.maxDate || "";
+  $("#user-dates-dialog").show();
+}
+
+function openUserPasswordDialog() {
+  const form = $("#user-password-form");
+  setError(form);
+  form.reset();
+  $("#user-password-dialog").show();
+}
+
+function openUserPortalPasswordDialog() {
+  const form = $("#user-portal-password-form");
+  setError(form);
+  form.reset();
+  const current = $("#portal-current-password");
+  // Impersonating admins can set a new portal password without the current one.
+  current.hidden = !!impersonating;
+  current.required = !impersonating;
+  $("#user-portal-password-dialog").show();
+}
+
+async function refreshUserPortal() {
+  try {
+    const [me, runsPayload] = await Promise.all([
+      api("GET", "/api/user/me"),
+      api("GET", "/api/user/runs?limit=30"),
+    ]);
+    userPortalMe = me;
+    const dateWindow = `${me.minDate ? formatDate(me.minDate) : "…"} → ${
+      me.maxDate
+        ? formatDate(me.maxDate)
+        : me.currentAppointmentDate
+          ? `before ${formatDate(me.currentAppointmentDate)}`
+          : "…"
+    }`;
+    const status = $("#user-status");
+    status.replaceChildren(
+      el("h2", {}, me.name || "Your profile"),
+      el("p", { class: "sub" }, me.visaEmail || ""),
+      el(
+        "div",
+        { class: "status-grid" },
+        statusField("Search", me.enabled ? "Enabled" : "Disabled"),
+        statusField(
+          "Booked appointment",
+          me.currentAppointmentDate ? formatDate(me.currentAppointmentDate) : "—",
+        ),
+        statusField(
+          "Reschedules left",
+          me.rescheduleRemaining != null && me.rescheduleMaximum != null
+            ? `${me.rescheduleRemaining} / ${me.rescheduleMaximum}`
+            : "—",
+        ),
+        statusField(
+          "Visa classes",
+          (me.visaClasses && me.visaClasses.length
+            ? me.visaClasses.join(", ")
+            : me.visaFingerprint) || "—",
+        ),
+        statusField("Date window", dateWindow, {
+          label: "Edit search dates",
+          onClick: openUserDatesDialog,
+        }),
+        statusField(
+          "Last run",
+          me.lastRun ? relativeTime(me.lastRun.startedAt) : "never",
+        ),
+        statusField("Next run", nextRunLabel(me.nextRunAt)),
+        statusField("AIS password", me.hasPassword ? "Saved" : "Missing", {
+          label: "Edit AIS password",
+          onClick: openUserPasswordDialog,
+        }),
+        statusField(
+          "Portal password",
+          me.portalRegistered ? "Set" : "Not registered",
+          me.portalRegistered
+            ? {
+                label: "Change portal password",
+                onClick: openUserPortalPasswordDialog,
+              }
+            : undefined,
+        ),
+      ),
+    );
+    const tbody = $("#user-runs");
+    const runs = runsPayload.runs || [];
+    tbody.replaceChildren(
+      ...runs.map((run) =>
+        el(
+          "tr",
+          {},
+          el("td", { class: "nowrap" }, formatTimestamp(run.startedAt)),
+          el("td", {}, run.status),
+          el("td", {}, run.result?.outcome || "—"),
+          el(
+            "td",
+            {},
+            run.result?.dates?.length
+              ? run.result.dates.map(formatDate).join(", ")
+              : "—",
+          ),
+        ),
+      ),
+    );
+    if (!runs.length) {
+      tbody.append(el("tr", {}, el("td", { colspan: "4", class: "hint" }, "No runs yet")));
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+$("#user-dates-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  setError(form);
+  try {
+    await api("PATCH", "/api/user/dates", {
+      minDate: named(form, "minDate").value || null,
+      maxDate: named(form, "maxDate").value || null,
+    });
+    $("#user-dates-dialog").hide();
+    toast("Dates saved", "success");
+    refreshUserPortal();
+  } catch (error) {
+    setError(form, error.message);
+  }
+});
+
+$("#user-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  setError(form);
+  try {
+    await api("PATCH", "/api/user/visa-password", {
+      visaPassword: named(form, "visaPassword").value,
+    });
+    form.reset();
+    $("#user-password-dialog").hide();
+    toast("AIS password updated", "success");
+    refreshUserPortal();
+  } catch (error) {
+    setError(form, error.message);
+  }
+});
+
+$("#user-portal-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  setError(form);
+  try {
+    const next = named(form, "newPassword").value;
+    if (next !== named(form, "confirmPassword").value) {
+      throw new Error("Passwords do not match");
+    }
+    await api("PATCH", "/api/user/portal-password", {
+      currentPassword: named(form, "currentPassword").value,
+      newPassword: next,
+    });
+    form.reset();
+    $("#user-portal-password-dialog").hide();
+    toast("Portal password updated", "success");
+    refreshUserPortal();
+  } catch (error) {
+    setError(form, error.message);
+  }
+});
+
+window.addEventListener("hashchange", () => {
+  const route = parseHashRoute();
+  if (route.name === "register" && route.token) showRegister(route.token);
 });
 
 $("[data-confirm-yes]").addEventListener("click", () => settleConfirm(true));
@@ -521,13 +893,52 @@ function runBadge(profile) {
   return badge(run.status, kind);
 }
 
-function iconAction(name, label, onclick, className) {
-  return el(
-    "sl-tooltip",
-    { placement: "top", hoist: true },
-    el("span", { slot: "content" }, label),
-    el("sl-icon-button", { name, label, class: className || "row-action", onclick }),
+function menuAction(name, label, onclick, className) {
+  const item = el(
+    "sl-menu-item",
+    { class: className || "" },
+    el("sl-icon", { slot: "prefix", name }),
+    label,
   );
+  item._runAction = onclick;
+  return item;
+}
+
+/** Hamburger menu of row actions. Hoisted + flip so bottom rows open upward. */
+function rowActionsMenu(actions) {
+  const items = actions.filter(Boolean);
+  const menu = el("sl-menu", {}, ...items);
+  const dropdown = el(
+    "sl-dropdown",
+    {
+      class: "row-actions-menu",
+      placement: "bottom-end",
+      distance: 6,
+      hoist: true,
+    },
+    el(
+      "sl-icon-button",
+      {
+        slot: "trigger",
+        name: "list",
+        label: "Actions",
+        class: "row-action-trigger",
+      },
+    ),
+    menu,
+  );
+  // Shoelace emits sl-select on the menu; host click listeners on items are unreliable.
+  menu.addEventListener("sl-select", (event) => {
+    const item = event.detail?.item;
+    const run = item?._runAction;
+    dropdown.hide?.();
+    if (typeof run === "function") {
+      Promise.resolve()
+        .then(() => run())
+        .catch((error) => toast(error.message || String(error)));
+    }
+  });
+  return el("div", { class: "row-actions" }, dropdown);
 }
 
 function formatVisaFingerprint(fingerprint) {
@@ -620,6 +1031,17 @@ function renderProfiles() {
                     : formatVisaFingerprint(profile.visaFingerprint) ||
                         el("span", { class: "hint" }, "visas unknown"),
                 ),
+                el(
+                  "div",
+                  { class: "sub hint" },
+                  profile.portalAccessEnabled === false
+                    ? "Portal disabled"
+                    : profile.portalRegistered
+                      ? "Portal registered"
+                      : profile.portalInviteExpiresAt
+                        ? "Portal invite pending"
+                        : "Portal not invited",
+                ),
               ]),
           waiting && profile.intakeError
             ? el("div", { class: "sub hint" }, profile.intakeError)
@@ -663,24 +1085,59 @@ function renderProfiles() {
         ),
         el(
           "td",
-          {},
-          el(
-            "div",
-            { class: "row-actions" },
+          { class: "col-actions" },
+          rowActionsMenu([
             waiting
-              ? iconAction(
+              ? menuAction(
                   "arrow-clockwise",
                   "Resend WhatsApp",
                   () => resendIntake(profile),
-                  "row-action",
                 )
               : busy
-                ? iconAction("stop-circle", "Stop", () => cancelRun(profile), "row-action stop")
-                : iconAction("play-circle", "Run now", () => runNow(profile), "row-action play"),
-            iconAction("clock-history", "Runs", () => openRuns(profile), "row-action history"),
-            iconAction("pencil", "Edit", () => openProfile(profile), "row-action edit"),
-            iconAction("trash", "Delete", () => deleteProfile(profile), "row-action danger"),
-          ),
+                ? menuAction(
+                    "stop-circle",
+                    "Stop",
+                    () => cancelRun(profile),
+                    "danger",
+                  )
+                : menuAction(
+                    "play-circle",
+                    "Run now",
+                    () => runNow(profile),
+                    "play",
+                  ),
+            !waiting
+              ? menuAction("person-badge", "Impersonate", () =>
+                  impersonateProfile(profile),
+                )
+              : null,
+            !waiting
+              ? menuAction(
+                  "envelope",
+                  profile.portalRegistered
+                    ? "Resend portal invite"
+                    : "Send portal invite",
+                  () => inviteProfile(profile),
+                )
+              : null,
+            !waiting
+              ? menuAction(
+                  profile.portalAccessEnabled === false ? "unlock" : "lock",
+                  profile.portalAccessEnabled === false
+                    ? "Enable portal access"
+                    : "Disable portal access",
+                  () => togglePortalAccess(profile),
+                )
+              : null,
+            menuAction("clock-history", "Runs", () => openRuns(profile), "history"),
+            menuAction("pencil", "Edit", () => openProfile(profile), "edit"),
+            menuAction(
+              "trash",
+              "Delete",
+              () => deleteProfile(profile),
+              "danger",
+            ),
+          ]),
         ),
       );
     }),
@@ -748,6 +1205,68 @@ async function deleteProfile(profile) {
   }
   try {
     await api("DELETE", `/api/profiles/${profile.id}`, {});
+    refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function inviteProfile(profile) {
+  try {
+    const result = await api("POST", `/api/profiles/${profile.id}/invite`, {});
+    const channels = [
+      result.emailed ? "email" : null,
+      result.whatsapped ? "WhatsApp" : null,
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    toast(`Invite sent via ${channels || "channel"}`, "success");
+    refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function impersonateProfile(profile) {
+  try {
+    const result = await api("POST", "/api/admin/impersonate", {
+      profileId: profile.id,
+    });
+    const session = await api("GET", "/api/session");
+    if (session.authenticated && session.impersonating) {
+      await applySession(session);
+      return;
+    }
+    // If the session cookie did not pick up the overlay, still enter the portal.
+    await applySession({
+      authenticated: true,
+      role: "user",
+      impersonating: true,
+      profileId: result.profileId,
+      profileName: result.name,
+      visaEmail: result.visaEmail,
+      portalAccessEnabled: result.portalAccessEnabled,
+      dev: !!session.dev,
+    });
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function togglePortalAccess(profile) {
+  const enable = profile.portalAccessEnabled === false;
+  const ok = await confirmAction(
+    enable
+      ? `Enable portal access for "${profile.name}"?`
+      : `Disable portal access for "${profile.name}"? They will not be able to sign in.`,
+    { okLabel: enable ? "Enable" : "Disable", variant: enable ? "primary" : "danger" },
+  );
+  if (!ok) return;
+  try {
+    await api("POST", `/api/profiles/${profile.id}/portal-access`, {
+      enabled: enable,
+    });
+    toast(enable ? "Portal access enabled" : "Portal access disabled", "success");
     refresh();
   } catch (error) {
     toast(error.message);
@@ -992,6 +1511,7 @@ $("#open-settings").addEventListener("click", async () => {
     "maxConcurrentRuns",
     "runTimeoutMinutes",
     "failureAlarmThreshold",
+    "publicBaseUrl",
   ]) {
     named(settingsForm, field).value = settings[field] ?? "";
   }
@@ -1283,12 +1803,75 @@ settingsForm.addEventListener("submit", async (event) => {
       runTimeoutMinutes: Number(named(form, "runTimeoutMinutes").value),
       failureAlarmThreshold: Number(named(form, "failureAlarmThreshold").value),
       botDebug: named(form, "botDebug").checked,
+      publicBaseUrl: named(form, "publicBaseUrl").value,
     });
     settingsDialog.hide();
     refresh();
   } catch (error) {
     setError(form, error.message);
   }
+});
+
+// ---- Portal audit ----
+
+const portalAuditDialog = $("#portal-audit-dialog");
+
+async function openPortalAudit() {
+  const select = $("#audit-profile");
+  const current = select.value || "any";
+  select.replaceChildren(el("sl-option", { value: "any" }, "All profiles"));
+  for (const profile of profiles) {
+    select.append(el("sl-option", { value: String(profile.id) }, profile.name));
+  }
+  select.value = current;
+  await loadPortalAudit();
+  portalAuditDialog.show();
+}
+
+async function loadPortalAudit() {
+  const params = new URLSearchParams({ limit: "200" });
+  const profileId = $("#audit-profile").value;
+  const action = $("#audit-action").value;
+  if (profileId && profileId !== "any") params.set("profileId", profileId);
+  if (action && action !== "any") params.set("action", action);
+  const data = await api("GET", `/api/portal-audit?${params}`);
+  const tbody = $("#portal-audit-rows");
+  const rows = data.audits || [];
+  tbody.replaceChildren(
+    ...rows.map((row) =>
+      el(
+        "tr",
+        {},
+        el("td", { class: "nowrap" }, formatTimestamp(row.createdAt)),
+        el("td", {}, row.profileName || (row.profileId != null ? `#${row.profileId}` : "—")),
+        el("td", {}, row.actor),
+        el("td", {}, row.action),
+        el(
+          "td",
+          { class: "sub" },
+          row.detail ? JSON.stringify(row.detail) : "—",
+        ),
+      ),
+    ),
+  );
+  if (!rows.length) {
+    tbody.append(
+      el("tr", {}, el("td", { colspan: "5", class: "hint" }, "No audit events")),
+    );
+  }
+}
+
+$("#open-portal-audit").addEventListener("click", () => {
+  openPortalAudit().catch((error) => toast(error.message));
+});
+$("#audit-refresh").addEventListener("click", () => {
+  loadPortalAudit().catch((error) => toast(error.message));
+});
+$("#audit-profile").addEventListener("sl-change", () => {
+  loadPortalAudit().catch((error) => toast(error.message));
+});
+$("#audit-action").addEventListener("sl-change", () => {
+  loadPortalAudit().catch((error) => toast(error.message));
 });
 
 // ---- Runs dialog ----

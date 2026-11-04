@@ -58,6 +58,10 @@
             <sl-icon-button id="open-notifications" class="hero-action notifications" name="bell-fill" label="Notifications"></sl-icon-button>
           </sl-tooltip>
           <sl-tooltip placement="bottom" hoist>
+            <span slot="content">Portal audit</span>
+            <sl-icon-button id="open-portal-audit" class="hero-action audit" name="journal-text" label="Portal audit"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip placement="bottom" hoist>
             <span slot="content">Settings</span>
             <sl-icon-button id="open-settings" class="hero-action settings" name="gear-fill" label="Settings"></sl-icon-button>
           </sl-tooltip>
@@ -77,10 +81,21 @@
           <p id="setup-hint" class="hint" hidden>
             Choose an admin password (at least 10 characters) to protect this UI.
           </p>
+          <div id="login-mode-row" class="login-mode-row">
+            <sl-button id="login-mode-user" type="button" size="small" variant="primary">User</sl-button>
+            <sl-button id="login-mode-admin" type="button" size="small">Admin</sl-button>
+          </div>
+          <sl-input
+            id="login-email"
+            type="email"
+            name="email"
+            label="Visa account email"
+            autocomplete="username"
+          ></sl-input>
           <sl-input
             type="password"
             name="password"
-            label="Admin password"
+            label="Password"
             autocomplete="current-password"
             required
             autofocus
@@ -97,6 +112,63 @@
           <sl-button type="submit" variant="primary" id="login-submit">Sign in</sl-button>
         </form>
       </sl-card>
+    </section>
+
+    <section id="register-view" hidden>
+      <sl-card class="login">
+        <form id="register-form">
+          <h2>Complete registration</h2>
+          <p id="register-hint" class="hint">Set a portal password to view your search status.</p>
+          <p id="register-identity" class="sub"></p>
+          <sl-input
+            type="password"
+            name="password"
+            label="Portal password"
+            autocomplete="new-password"
+            required
+          ></sl-input>
+          <sl-input
+            type="password"
+            name="confirm"
+            label="Confirm password"
+            autocomplete="new-password"
+            required
+          ></sl-input>
+          <sl-alert variant="danger" data-error></sl-alert>
+          <sl-button type="submit" variant="primary">Create password</sl-button>
+        </form>
+      </sl-card>
+    </section>
+
+    <section id="user-view" hidden>
+      <sl-alert id="impersonation-banner" variant="primary" open hidden>
+        <span id="impersonation-banner-text"></span>
+        <sl-button id="stop-impersonation" slot="suffix" size="small">Exit</sl-button>
+      </sl-alert>
+      <sl-alert id="portal-disabled-banner" variant="warning" open hidden>
+        This account is disabled
+      </sl-alert>
+      <div class="user-portal">
+        <div class="user-portal-main">
+          <div class="user-status" id="user-status"></div>
+        </div>
+        <div class="user-portal-side user-panel">
+          <h3>Recent runs</h3>
+          <div class="runs-wrap">
+            <table class="logs">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Status</th>
+                  <th>Outcome</th>
+                  <th>Dates</th>
+                </tr>
+              </thead>
+              <tbody id="user-runs"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="app-view" hidden>
@@ -383,6 +455,15 @@
                   <sl-icon-button class="help-tip" name="question-circle" label="About bot debug output"></sl-icon-button>
                 </sl-tooltip>
               </div>
+              <sl-input class="wide" name="publicBaseUrl" type="url" placeholder="https://example.com">
+                <span slot="label" class="label-text">
+                  Public base URL
+                  <sl-tooltip placement="bottom">
+                    <span slot="content">Used in portal invite links emailed or sent on WhatsApp. Example: https://visa.example.com (no trailing slash). If empty, invites use the host from the admin request.</span>
+                    <sl-icon-button class="help-tip" name="question-circle" label="About public base URL"></sl-icon-button>
+                  </sl-tooltip>
+                </span>
+              </sl-input>
             </div>
           </sl-tab-panel>
         </sl-tab-group>
@@ -464,6 +545,7 @@
           <sl-option value="failure">Failure alarm</sl-option>
           <sl-option value="test">Test</sl-option>
           <sl-option value="intake">Intake</sl-option>
+          <sl-option value="invite">Portal invite</sl-option>
         </sl-select>
         <sl-select id="notes-status" label="Status" size="small" value="any" hoist>
           <sl-option value="any">Any</sl-option>
@@ -525,6 +607,118 @@
       <div slot="footer" class="dialog-actions">
         <sl-button data-confirm-no>Cancel</sl-button>
         <sl-button variant="primary" data-confirm-yes>Continue</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="portal-audit-dialog" class="wide-dialog" label="Portal audit">
+      <div class="runs-filters">
+        <sl-select id="audit-profile" label="Profile" size="small" value="any" hoist>
+          <sl-option value="any">All profiles</sl-option>
+        </sl-select>
+        <sl-select id="audit-action" label="Action" size="small" value="any" hoist>
+          <sl-option value="any">Any</sl-option>
+          <sl-option value="login_success">Login success</sl-option>
+          <sl-option value="login_failure">Login failure</sl-option>
+          <sl-option value="register">Register</sl-option>
+          <sl-option value="logout">Logout</sl-option>
+          <sl-option value="update_dates">Update dates</sl-option>
+          <sl-option value="update_visa_password">Update AIS password</sl-option>
+          <sl-option value="update_portal_password">Update portal password</sl-option>
+          <sl-option value="impersonate_start">Impersonate start</sl-option>
+          <sl-option value="impersonate_stop">Impersonate stop</sl-option>
+          <sl-option value="portal_access_enabled">Access enabled</sl-option>
+          <sl-option value="portal_access_disabled">Access disabled</sl-option>
+          <sl-option value="invite_sent">Invite sent</sl-option>
+        </sl-select>
+        <sl-button id="audit-refresh" size="small">Refresh</sl-button>
+      </div>
+      <div class="runs-wrap">
+        <table class="logs">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Profile</th>
+              <th>Actor</th>
+              <th>Action</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="portal-audit-rows"></tbody>
+        </table>
+      </div>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Close</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="user-dates-dialog" label="Search dates">
+      <form id="user-dates-form">
+        <p class="hint">
+          Changes are refused if they overlap another enabled profile that shares any visa class.
+        </p>
+        <div class="grid">
+          <sl-input name="minDate" type="date" label="Earliest date"></sl-input>
+          <sl-input name="maxDate" type="date" label="Latest date"></sl-input>
+        </div>
+        <sl-alert variant="danger" data-error></sl-alert>
+      </form>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Cancel</sl-button>
+        <sl-button variant="primary" type="submit" form="user-dates-form">Save dates</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="user-password-dialog" label="AIS account password">
+      <form id="user-password-form">
+        <p class="hint">Updates the password the bot uses to log into the visa site.</p>
+        <sl-input
+          name="visaPassword"
+          type="password"
+          label="New AIS password"
+          autocomplete="new-password"
+          required
+        ></sl-input>
+        <sl-alert variant="danger" data-error></sl-alert>
+      </form>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Cancel</sl-button>
+        <sl-button variant="primary" type="submit" form="user-password-form">Update password</sl-button>
+      </div>
+    </sl-dialog>
+
+    <sl-dialog id="user-portal-password-dialog" label="Portal password">
+      <form id="user-portal-password-form">
+        <p class="hint">
+          This password is used to sign in to this site with your visa account email.
+        </p>
+        <sl-input
+          id="portal-current-password"
+          name="currentPassword"
+          type="password"
+          label="Current password"
+          autocomplete="current-password"
+        ></sl-input>
+        <sl-input
+          name="newPassword"
+          type="password"
+          label="New password"
+          autocomplete="new-password"
+          required
+        ></sl-input>
+        <sl-input
+          name="confirmPassword"
+          type="password"
+          label="Confirm new password"
+          autocomplete="new-password"
+          required
+        ></sl-input>
+        <sl-alert variant="danger" data-error></sl-alert>
+      </form>
+      <div slot="footer" class="dialog-actions">
+        <sl-button data-close>Cancel</sl-button>
+        <sl-button variant="primary" type="submit" form="user-portal-password-form">
+          Update password
+        </sl-button>
       </div>
     </sl-dialog>
   </body>

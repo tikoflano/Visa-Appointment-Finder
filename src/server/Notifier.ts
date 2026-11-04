@@ -714,6 +714,136 @@ export class Notifier {
   }
 
   /**
+   * Create an invite token and notify the profile contact. Uses Settings
+   * publicBaseUrl, PUBLIC_BASE_URL, or an optional baseUrlOverride for the link.
+   */
+  async inviteProfile(
+    profileId: number,
+    baseUrlOverride?: string,
+  ): Promise<{
+    emailed: boolean;
+    whatsapped: boolean;
+    expiresAt: string;
+  }> {
+    const { token, expiresAt, profile } =
+      await this.store.createPortalInvite(profileId);
+    const settings = await this.store.getSettings();
+    const base = (
+      baseUrlOverride ||
+      settings.publicBaseUrl ||
+      process.env.PUBLIC_BASE_URL ||
+      ""
+    ).replace(/\/$/, "");
+    if (!base) {
+      throw new ValidationError(
+        "Set Public base URL in Settings (or PUBLIC_BASE_URL) so invite links work",
+      );
+    }
+    const inviteUrl = `${base}/#/register?token=${encodeURIComponent(token)}`;
+    const sent = await this.sendPortalInvite(profile, inviteUrl, expiresAt);
+    return { ...sent, expiresAt };
+  }
+
+  /**
+   * Email and/or WhatsApp a portal registration link for the profile's visa email.
+   * Uses notification channel toggles; at least one successful send is required.
+   */
+  async sendPortalInvite(
+    profile: Profile,
+    inviteUrl: string,
+    expiresAt: string,
+  ): Promise<{ emailed: boolean; whatsapped: boolean }> {
+    const settings = await this.store.getSettings();
+    const emailReady = settings.emailEnabled && this.emailReady(settings);
+    const whatsappReady =
+      settings.whatsappEnabled && this.whatsappReady(settings);
+    const toEmail = profile.visaEmail.trim();
+    const whatsappChats = uniqueIds(
+      parseWhatsAppChatIds(profile.whatsappDestination),
+      profile.contactPhone ? [profile.contactPhone] : [],
+    );
+    const subject = `Complete your Visa Appointment Finder registration`;
+    const expiresLabel = new Date(expiresAt).toUTCString();
+    const text =
+      `Hi ${profile.name},\n\n` +
+      `Your visa search profile is ready. Open this link to set your portal password:\n` +
+      `${inviteUrl}\n\n` +
+      `This link expires ${expiresLabel}.\n` +
+      `Sign in later with your AIS email (${toEmail}).\n`;
+    const html =
+      `<p>Hi ${escapeHtml(profile.name)},</p>` +
+      `<p>Your visa search profile is ready. ` +
+      `<a href="${escapeHtml(inviteUrl)}">Set your portal password</a> to view status and runs.</p>` +
+      `<p>This link expires ${escapeHtml(expiresLabel)}.<br>` +
+      `Sign in with your AIS email (${escapeHtml(toEmail)}).</p>`;
+    const waText =
+      `Visa Appointment Finder — complete registration for ${profile.name}:\n` +
+      `${inviteUrl}\n` +
+      `(expires ${expiresLabel})`;
+
+    let emailed = false;
+    let whatsapped = false;
+    let lastError = "";
+
+    if (emailReady && toEmail) {
+      try {
+        const email = new EmailService({
+          user: settings.gmailUser,
+          pass: await this.store.getGmailAppPassword(),
+        });
+        await email.sendMail(toEmail, subject, html, text);
+        await this.logNotification({
+          kind: "invite",
+          channel: "email",
+          status: "sent",
+          profileId: profile.id,
+          recipients: toEmail,
+          subject,
+          summary: `Portal invite for ${profile.name}`,
+        });
+        emailed = true;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        await this.logNotification({
+          kind: "invite",
+          channel: "email",
+          status: "failed",
+          profileId: profile.id,
+          recipients: toEmail,
+          subject,
+          summary: `Portal invite for ${profile.name}`,
+          error: lastError,
+        });
+      }
+    }
+
+    if (whatsappReady && whatsappChats.length) {
+      const outcome = await this.sendWhatsApp({
+        kind: "invite",
+        profileId: profile.id,
+        recipients: whatsappChats.join(", "),
+        subject,
+        summary: `Portal invite for ${profile.name}`,
+        text: waText,
+        settings,
+        chats: whatsappChats,
+      });
+      if (outcome === "sent") whatsapped = true;
+      if (outcome === "failed") {
+        lastError = lastError || "whatsapp failed";
+      }
+    }
+
+    if (!emailed && !whatsapped) {
+      throw new ValidationError(
+        lastError ||
+          "Could not send invite. Configure email and/or WhatsApp, and ensure the profile has a visa email or WhatsApp destination.",
+      );
+    }
+    return { emailed, whatsapped };
+  }
+
+  /**
    * Tell admin destinations that a WhatsApp intake stopped after 24 hours.
    * The contact phone is notified separately and is not gated by the channel switches.
    */

@@ -73,24 +73,65 @@ class HttpError extends Error {
   }
 }
 
-class Sessions {
-  private readonly sessions = new Map<string, number>();
+type SessionRole = "admin" | "user";
 
-  create(): string {
+interface SessionRecord {
+  expires: number;
+  role: SessionRole;
+  profileId?: number;
+  impersonating?: boolean;
+}
+
+class Sessions {
+  private readonly sessions = new Map<string, SessionRecord>();
+
+  create(data: {
+    role: SessionRole;
+    profileId?: number;
+    impersonating?: boolean;
+  }): string {
     const token = crypto.randomBytes(32).toString("base64url");
-    this.sessions.set(token, Date.now() + SESSION_TTL_MS);
+    this.sessions.set(token, {
+      expires: Date.now() + SESSION_TTL_MS,
+      role: data.role,
+      profileId: data.profileId,
+      impersonating: !!data.impersonating,
+    });
     return token;
   }
 
-  isValid(token: string | undefined): boolean {
-    if (!token) return false;
-    const expires = this.sessions.get(token);
-    if (!expires || expires < Date.now()) {
+  get(token: string | undefined): SessionRecord | undefined {
+    if (!token) return undefined;
+    const session = this.sessions.get(token);
+    if (!session || session.expires < Date.now()) {
       this.sessions.delete(token);
-      return false;
+      return undefined;
     }
-    this.sessions.set(token, Date.now() + SESSION_TTL_MS);
-    return true;
+    session.expires = Date.now() + SESSION_TTL_MS;
+    return session;
+  }
+
+  isValid(token: string | undefined): boolean {
+    return !!this.get(token);
+  }
+
+  update(
+    token: string | undefined,
+    patch: {
+      role?: SessionRole;
+      profileId?: number | null;
+      impersonating?: boolean;
+    },
+  ): SessionRecord | undefined {
+    const session = this.get(token);
+    if (!session) return undefined;
+    if (patch.role !== undefined) session.role = patch.role;
+    if (patch.profileId === null) delete session.profileId;
+    else if (patch.profileId !== undefined) session.profileId = patch.profileId;
+    if (patch.impersonating !== undefined) {
+      session.impersonating = patch.impersonating;
+    }
+    return session;
   }
 
   destroy(token: string | undefined): void {
@@ -104,6 +145,7 @@ type Handler = (ctx: {
   params: string[];
   body: any;
   url: URL;
+  session: SessionRecord | null;
 }) => Promise<unknown>;
 
 interface Route {
@@ -111,6 +153,8 @@ interface Route {
   pattern: RegExp;
   handler: Handler;
   public?: boolean;
+  /** Default for non-public routes is admin (not impersonating). */
+  access?: "admin" | "user";
 }
 
 function sessionCookie(token: string, maxAgeSeconds: number): string {
@@ -137,7 +181,14 @@ function parseNotifiedQuery(value: string | null): boolean | undefined {
 
 function parseNotificationKind(
   value: string | null,
-): "appointment" | "heartbeat" | "failure" | "test" | "intake" | undefined {
+):
+  | "appointment"
+  | "heartbeat"
+  | "failure"
+  | "test"
+  | "intake"
+  | "invite"
+  | undefined {
   const raw = value?.trim().toLowerCase();
   if (!raw) return undefined;
   if (
@@ -145,7 +196,8 @@ function parseNotificationKind(
     raw === "heartbeat" ||
     raw === "failure" ||
     raw === "test" ||
-    raw === "intake"
+    raw === "intake" ||
+    raw === "invite"
   ) {
     return raw;
   }
@@ -243,6 +295,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const intake = new IntakeMonitor(store, notifier);
   const sessions = new Sessions();
   const failedLogins: number[] = [];
+  const failedUserLogins: number[] = [];
 
   const profileId = (params: string[]) => Number(params[0]);
 
@@ -250,6 +303,172 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const profile = await store.getProfile(id);
     if (!profile) throw new HttpError(404, "Profile not found");
     return profile;
+  };
+
+  const clientMeta = (req: http.IncomingMessage) => ({
+    ip:
+      (req.headers["x-forwarded-for"] as string | undefined)
+        ?.split(",")[0]
+        ?.trim() ||
+      req.socket.remoteAddress ||
+      null,
+    userAgent: req.headers["user-agent"] || null,
+  });
+
+  const audit = async (
+    input: Parameters<Store["recordPortalAudit"]>[0],
+    req: http.IncomingMessage,
+  ) => {
+    const meta = clientMeta(req);
+    await store.recordPortalAudit({
+      ...input,
+      ip: input.ip ?? meta.ip,
+      userAgent: input.userAgent ?? meta.userAgent,
+    });
+  };
+
+  const portalActor = (
+    session: SessionRecord | null,
+  ): "user" | "admin_impersonation" =>
+    session?.impersonating ? "admin_impersonation" : "user";
+
+  const effectiveUserProfileId = (
+    session: SessionRecord | null,
+  ): number | null => {
+    if (!session) return null;
+    if (session.role === "user" && session.profileId) return session.profileId;
+    if (session.role === "admin" && session.impersonating && session.profileId) {
+      return session.profileId;
+    }
+    return null;
+  };
+
+  const requireUserContext = async (
+    session: SessionRecord | null,
+  ): Promise<{ profileId: number; impersonating: boolean }> => {
+    if (DEV && !session) {
+      throw new HttpError(
+        401,
+        "User portal requires a session (sign in or impersonate)",
+      );
+    }
+    const id = effectiveUserProfileId(session);
+    if (!id) throw new HttpError(401, "Not authenticated");
+    const profile = await store.getProfile(id);
+    if (!profile) throw new HttpError(401, "Not authenticated");
+    const impersonating = !!session?.impersonating;
+    if (!impersonating && !profile.portalAccessEnabled) {
+      throw new HttpError(401, "Portal access is disabled for this account");
+    }
+    if (!impersonating && session?.role === "user" && !profile.portalRegistered) {
+      throw new HttpError(401, "Not authenticated");
+    }
+    return { profileId: id, impersonating };
+  };
+
+  const resolvePublicBaseUrl = async (req: http.IncomingMessage) => {
+    const settings = await store.getSettings();
+    if (settings.publicBaseUrl) return settings.publicBaseUrl.replace(/\/$/, "");
+    const host = req.headers.host;
+    if (!host) {
+      throw new ValidationError(
+        "Set Public base URL in Settings (or PUBLIC_BASE_URL) so invite links work",
+      );
+    }
+    const proto =
+      (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0] ||
+      "http";
+    return `${proto}://${host}`.replace(/\/$/, "");
+  };
+
+  const sendInviteForProfile = async (
+    id: number,
+    req: http.IncomingMessage,
+  ) => {
+    let baseOverride: string | undefined;
+    try {
+      baseOverride = await resolvePublicBaseUrl(req);
+    } catch {
+      baseOverride = undefined;
+    }
+    const sent = await notifier.inviteProfile(id, baseOverride);
+    await audit(
+      {
+        profileId: id,
+        actor: "admin",
+        action: "invite_sent",
+        detail: { emailed: sent.emailed, whatsapped: sent.whatsapped },
+      },
+      req,
+    );
+    return {
+      ok: true,
+      expiresAt: sent.expiresAt,
+      emailed: sent.emailed,
+      whatsapped: sent.whatsapped,
+      profile: await store.getProfile(id),
+    };
+  };
+
+  const sessionPayload = async (
+    req: http.IncomingMessage,
+    session: SessionRecord | null,
+  ) => {
+    const setupRequired = !DEV && !(await store.hasAdminPassword());
+    if (DEV && !session) {
+      return {
+        authenticated: true,
+        role: "admin" as const,
+        setupRequired: false,
+        dev: true,
+        impersonating: false,
+        portalAccessEnabled: true,
+      };
+    }
+    if (!session) {
+      return {
+        authenticated: false,
+        role: null,
+        setupRequired,
+        dev: DEV,
+        impersonating: false,
+      };
+    }
+    const userId = effectiveUserProfileId(session);
+    let profileName: string | null = null;
+    let visaEmail: string | null = null;
+    let portalAccessEnabled = true;
+    if (userId) {
+      const profile = await store.getProfile(userId);
+      if (profile) {
+        profileName = profile.name;
+        visaEmail = profile.visaEmail;
+        portalAccessEnabled = profile.portalAccessEnabled;
+      } else if (session.role === "user") {
+        return {
+          authenticated: false,
+          role: null,
+          setupRequired,
+          dev: DEV,
+          impersonating: false,
+        };
+      }
+    }
+    const inUserView =
+      session.role === "user" ||
+      (session.role === "admin" && !!session.impersonating);
+    return {
+      authenticated: true,
+      role: inUserView ? "user" : "admin",
+      realRole: session.role,
+      setupRequired: false,
+      dev: DEV,
+      profileId: userId,
+      profileName,
+      visaEmail,
+      impersonating: !!session.impersonating,
+      portalAccessEnabled,
+    };
   };
 
   /**
@@ -294,11 +513,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       method: "GET",
       pattern: /^\/api\/session$/,
       public: true,
-      handler: async ({ req }) => ({
-        authenticated: DEV || sessions.isValid(getCookie(req, "sid")),
-        setupRequired: !DEV && !(await store.hasAdminPassword()),
-        dev: DEV,
-      }),
+      handler: async ({ req, session }) => sessionPayload(req, session),
     },
     {
       method: "POST",
@@ -309,7 +524,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           throw new HttpError(409, "Admin password already set");
         }
         await store.setAdminPassword(String(body.password ?? ""));
-        const token = sessions.create();
+        const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
           sessionCookie(token, SESSION_TTL_MS / 1000),
@@ -336,7 +551,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           throw new HttpError(401, "Wrong password");
         }
 
-        const token = sessions.create();
+        const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
           sessionCookie(token, SESSION_TTL_MS / 1000),
@@ -346,16 +561,429 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "POST",
+      pattern: /^\/api\/user\/login$/,
+      public: true,
+      handler: async ({ req, res, body }) => {
+        const cutoff = Date.now() - LOGIN_LOCKOUT_MS;
+        while (failedUserLogins.length && failedUserLogins[0] < cutoff) {
+          failedUserLogins.shift();
+        }
+        if (failedUserLogins.length >= LOGIN_LOCKOUT_THRESHOLD) {
+          throw new HttpError(429, "Too many failed attempts, try later");
+        }
+        const email = String(body.email ?? "").trim();
+        try {
+          const profile = await store.verifyPortalLogin(
+            email,
+            String(body.password ?? ""),
+          );
+          const token = sessions.create({
+            role: "user",
+            profileId: profile.id,
+          });
+          res.setHeader(
+            "Set-Cookie",
+            sessionCookie(token, SESSION_TTL_MS / 1000),
+          );
+          await audit(
+            {
+              profileId: profile.id,
+              actor: "user",
+              action: "login_success",
+              detail: { email: profile.visaEmail },
+            },
+            req,
+          );
+          return { ok: true };
+        } catch (error) {
+          const message =
+            error instanceof ValidationError
+              ? error.message
+              : "Wrong email or password";
+          const profile = email
+            ? await store.findProfileByVisaEmail(email)
+            : undefined;
+          await audit(
+            {
+              profileId: profile?.id ?? null,
+              actor: "user",
+              action: "login_failure",
+              detail: { email: email || null, reason: message },
+            },
+            req,
+          );
+          failedUserLogins.push(Date.now());
+          await sleep(1000);
+          throw new HttpError(401, message);
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/user\/register$/,
+      public: true,
+      handler: async ({ req, res, body }) => {
+        const token = String(body.token ?? "").trim();
+        const password = String(body.password ?? "");
+        try {
+          const profile = await store.registerPortalUser(token, password);
+          const sid = sessions.create({
+            role: "user",
+            profileId: profile.id,
+          });
+          res.setHeader(
+            "Set-Cookie",
+            sessionCookie(sid, SESSION_TTL_MS / 1000),
+          );
+          await audit(
+            {
+              profileId: profile.id,
+              actor: "user",
+              action: "register",
+              detail: { email: profile.visaEmail },
+            },
+            req,
+          );
+          return { ok: true, profile: store.toUserPortalView(profile) };
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            throw new HttpError(400, error.message);
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/user\/invite$/,
+      public: true,
+      handler: async ({ url }) => {
+        const token = String(url.searchParams.get("token") ?? "").trim();
+        const profile = await store.findProfileByInviteToken(token);
+        if (!profile) {
+          throw new HttpError(400, "Invite link is invalid or expired");
+        }
+        if (!profile.portalAccessEnabled) {
+          throw new HttpError(400, "Portal access is disabled for this account");
+        }
+        return {
+          name: profile.name,
+          visaEmail: profile.visaEmail,
+          expiresAt: profile.portalInviteExpiresAt,
+        };
+      },
+    },
+    {
+      method: "POST",
       pattern: /^\/api\/logout$/,
-      handler: async ({ req, res }) => {
-        sessions.destroy(getCookie(req, "sid"));
+      public: true,
+      handler: async ({ req, res, session }) => {
+        const sid = getCookie(req, "sid");
+        if (session?.role === "user" && session.profileId) {
+          await audit(
+            {
+              profileId: session.profileId,
+              actor: "user",
+              action: "logout",
+            },
+            req,
+          );
+        } else if (session?.impersonating && session.profileId) {
+          await audit(
+            {
+              profileId: session.profileId,
+              actor: "admin",
+              action: "impersonate_stop",
+              detail: { via: "logout" },
+            },
+            req,
+          );
+        }
+        sessions.destroy(sid);
         res.setHeader("Set-Cookie", sessionCookie("", 0));
         return { ok: true };
       },
     },
     {
       method: "GET",
+      pattern: /^\/api\/user\/me$/,
+      access: "user",
+      handler: async ({ session }) => {
+        const { profileId: id, impersonating } =
+          await requireUserContext(session);
+        const profile = await requireProfile(id);
+        const [latestRuns, successfulRuns, settings] = await Promise.all([
+          store.getLatestRuns(),
+          store.getProfilesWithSuccessfulRuns(),
+          store.getSettings(),
+        ]);
+        const lastRun = latestRuns.get(id) ?? null;
+        const lastSearchStartedAt =
+          lastRun && lastRun.trigger !== "probe" ? lastRun.startedAt : null;
+        const intervalMs = settings.intervalMinutes * 60 * 1000;
+        return {
+          ...store.toUserPortalView(profile),
+          impersonating,
+          state: scheduler.getState(id),
+          lastRun: lastRun
+            ? {
+                id: lastRun.id,
+                status: lastRun.status,
+                trigger: lastRun.trigger,
+                startedAt: lastRun.startedAt,
+                finishedAt: lastRun.finishedAt,
+                result: lastRun.result,
+              }
+            : null,
+          hasSuccessfulRun: successfulRuns.has(id),
+          nextRunAt: Scheduler.nextRunAt(
+            profile.enabled,
+            lastSearchStartedAt,
+            intervalMs,
+          ),
+        };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/user\/runs$/,
+      access: "user",
+      handler: async ({ session, url }) => {
+        const { profileId: id } = await requireUserContext(session);
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+        const runs = await store.listRuns(id, limit);
+        return {
+          runs: runs.map((run) => ({
+            id: run.id,
+            status: run.status,
+            trigger: run.trigger,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+            result: run.result,
+          })),
+        };
+      },
+    },
+    {
+      method: "PATCH",
+      pattern: /^\/api\/user\/dates$/,
+      access: "user",
+      handler: async ({ req, session, body }) => {
+        const { profileId: id, impersonating } =
+          await requireUserContext(session);
+        const before = await requireProfile(id);
+        const minDate =
+          body.minDate === undefined || body.minDate === ""
+            ? null
+            : String(body.minDate);
+        const maxDate =
+          body.maxDate === undefined || body.maxDate === ""
+            ? null
+            : String(body.maxDate);
+        const profile = await store.updateUserDates(id, minDate, maxDate);
+        await audit(
+          {
+            profileId: id,
+            actor: portalActor(session),
+            action: "update_dates",
+            detail: {
+              before: { minDate: before.minDate, maxDate: before.maxDate },
+              after: { minDate: profile.minDate, maxDate: profile.maxDate },
+              impersonating,
+            },
+          },
+          req,
+        );
+        return store.toUserPortalView(profile);
+      },
+    },
+    {
+      method: "PATCH",
+      pattern: /^\/api\/user\/visa-password$/,
+      access: "user",
+      handler: async ({ req, session, body }) => {
+        const { profileId: id, impersonating } =
+          await requireUserContext(session);
+        const profile = await store.updateUserVisaPassword(
+          id,
+          String(body.visaPassword ?? ""),
+        );
+        await audit(
+          {
+            profileId: id,
+            actor: portalActor(session),
+            action: "update_visa_password",
+            detail: { changed: true, impersonating },
+          },
+          req,
+        );
+        return store.toUserPortalView(profile);
+      },
+    },
+    {
+      method: "PATCH",
+      pattern: /^\/api\/user\/portal-password$/,
+      access: "user",
+      handler: async ({ req, session, body }) => {
+        const { profileId: id, impersonating } =
+          await requireUserContext(session);
+        const profile = await store.updatePortalPassword(id, {
+          currentPassword: String(body.currentPassword ?? ""),
+          newPassword: String(body.newPassword ?? ""),
+          requireCurrent: !impersonating,
+        });
+        await audit(
+          {
+            profileId: id,
+            actor: portalActor(session),
+            action: "update_portal_password",
+            detail: { changed: true, impersonating },
+          },
+          req,
+        );
+        return store.toUserPortalView(profile);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/profiles\/(\d+)\/invite$/,
+      access: "admin",
+      handler: async ({ req, params }) => {
+        const id = profileId(params);
+        await requireProfile(id);
+        return sendInviteForProfile(id, req);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/profiles\/(\d+)\/portal-access$/,
+      access: "admin",
+      handler: async ({ req, params, body }) => {
+        const id = profileId(params);
+        await requireProfile(id);
+        const enabled = !!body.enabled;
+        const profile = await store.setPortalAccessEnabled(id, enabled);
+        await audit(
+          {
+            profileId: id,
+            actor: "admin",
+            action: enabled ? "portal_access_enabled" : "portal_access_disabled",
+          },
+          req,
+        );
+        return profile;
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/impersonate$/,
+      access: "admin",
+      handler: async ({ req, res, body, session }) => {
+        const id = Number(body.profileId);
+        if (!Number.isInteger(id) || id < 1) {
+          throw new HttpError(400, "Invalid profileId");
+        }
+        const profile = await requireProfile(id);
+        if (!session || session.role !== "admin") {
+          throw new HttpError(401, "Not authenticated");
+        }
+        const sid = getCookie(req, "sid");
+        const updated = sessions.update(sid, {
+          impersonating: true,
+          profileId: id,
+        });
+        // Dev may have an ephemeral admin session with no cookie yet.
+        if (!updated) {
+          const token = sessions.create({
+            role: "admin",
+            impersonating: true,
+            profileId: id,
+          });
+          res.setHeader(
+            "Set-Cookie",
+            sessionCookie(token, SESSION_TTL_MS / 1000),
+          );
+        }
+        await audit(
+          {
+            profileId: id,
+            actor: "admin",
+            action: "impersonate_start",
+            detail: {
+              name: profile.name,
+              portalAccessEnabled: profile.portalAccessEnabled,
+            },
+          },
+          req,
+        );
+        return {
+          ok: true,
+          profileId: id,
+          name: profile.name,
+          visaEmail: profile.visaEmail,
+          portalAccessEnabled: profile.portalAccessEnabled,
+        };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/stop-impersonation$/,
+      public: true,
+      handler: async ({ req, session }) => {
+        if (!session || (!session.impersonating && session.role !== "admin")) {
+          throw new HttpError(400, "Not impersonating");
+        }
+        if (!session.impersonating) {
+          throw new HttpError(400, "Not impersonating");
+        }
+        const profileIdValue = session.profileId ?? null;
+        await audit(
+          {
+            profileId: profileIdValue,
+            actor: "admin",
+            action: "impersonate_stop",
+          },
+          req,
+        );
+        sessions.update(getCookie(req, "sid"), {
+          impersonating: false,
+          profileId: null,
+        });
+        return { ok: true };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/portal-audit$/,
+      access: "admin",
+      handler: async ({ url }) => {
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 500);
+        const from = parseIsoQuery(url.searchParams.get("from"), "from");
+        const to = parseIsoQuery(url.searchParams.get("to"), "to");
+        if (from && to && from > to) throw new HttpError(400, "From must be before To");
+        const rawProfile = url.searchParams.get("profileId");
+        let filterProfileId: number | null | undefined;
+        if (rawProfile) {
+          filterProfileId = Number(rawProfile);
+          if (!Number.isInteger(filterProfileId) || filterProfileId < 1) {
+            throw new HttpError(400, "Invalid profileId");
+          }
+        }
+        const action = url.searchParams.get("action")?.trim() || null;
+        return {
+          audits: await store.listPortalAudit(limit, {
+            profileId: filterProfileId,
+            action,
+            from,
+            to,
+          }),
+        };
+      },
+    },
+    {
+      method: "GET",
       pattern: /^\/api\/profiles$/,
+      access: "admin",
       handler: async () => {
         const [profiles, latestRuns, successfulRuns, settings] =
           await Promise.all([
@@ -433,7 +1061,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     {
       method: "POST",
       pattern: /^\/api\/profiles$/,
-      handler: async ({ body }) => {
+      access: "admin",
+      handler: async ({ req, body }) => {
         const wantEnabled = !!body.enabled;
         const profile = await store.createProfile({ ...body, enabled: false });
         if (wantEnabled) {
@@ -447,12 +1076,21 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
             );
           }
         }
+        try {
+          await sendInviteForProfile(profile.id, req);
+        } catch (error) {
+          console.warn(
+            `Portal invite not sent for profile ${profile.id}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
         return (await store.getProfile(profile.id))!;
       },
     },
     {
       method: "PUT",
       pattern: /^\/api\/profiles\/(\d+)$/,
+      access: "admin",
       handler: async ({ params, body }) => {
         const id = profileId(params);
         const existing = await requireProfile(id);
@@ -748,8 +1386,27 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       });
       if (!route) throw new HttpError(404, "Not found");
 
-      if (!route.public && !DEV && !sessions.isValid(getCookie(req, "sid"))) {
-        throw new HttpError(401, "Not authenticated");
+      const sid = getCookie(req, "sid");
+      let session = sessions.get(sid) ?? null;
+      if (DEV && !session && !route.public) {
+        session = { expires: Date.now() + SESSION_TTL_MS, role: "admin" };
+      }
+
+      if (!route.public) {
+        if (!session) {
+          throw new HttpError(401, "Not authenticated");
+        }
+        const access = route.access ?? "admin";
+        if (access === "admin") {
+          if (session.role !== "admin" || session.impersonating) {
+            throw new HttpError(403, "Admin access required");
+          }
+        } else if (access === "user") {
+          const userId = effectiveUserProfileId(session);
+          if (!userId) {
+            throw new HttpError(401, "Not authenticated");
+          }
+        }
       }
 
       let body: any = {};
@@ -762,7 +1419,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         body = await readJson(req);
       }
 
-      sendJson(res, 200, await route.handler({ req, res, params: params!, body, url }));
+      sendJson(
+        res,
+        200,
+        await route.handler({
+          req,
+          res,
+          params: params!,
+          body,
+          url,
+          session,
+        }),
+      );
     } catch (error) {
       if (error instanceof HttpError) {
         sendJson(res, error.status, { error: error.message });
