@@ -114,6 +114,14 @@
             password-toggle
             hidden
           ></sl-input>
+          <div id="login-passkey-panel" class="mfa-passkey" hidden>
+            <sl-button id="login-passkey" type="button" variant="primary">
+              Use passkey
+            </sl-button>
+            <button id="login-use-totp" type="button" class="linkish" hidden>
+              Use authenticator code instead
+            </button>
+          </div>
           <sl-input
             id="login-totp"
             type="text"
@@ -125,6 +133,9 @@
             pattern="[0-9]{6}"
             hidden
           ></sl-input>
+          <button id="login-use-passkey" type="button" class="linkish" hidden>
+            Use passkey instead
+          </button>
           <div id="login-turnstile" class="turnstile" hidden></div>
           <sl-alert variant="danger" data-error></sl-alert>
           <sl-button type="submit" variant="primary" id="login-submit">Sign in</sl-button>
@@ -540,10 +551,29 @@
           </sl-tab-panel>
           <sl-tab-panel name="security">
             <fieldset>
+              <legend>Passkeys</legend>
+              <p id="passkey-status" class="hint">Loading…</p>
+              <p class="hint">
+                Optional until enrolled. Once you add a passkey, every admin sign-in needs your password and either a passkey or (if enabled) an authenticator code. Passkeys need HTTPS or localhost.
+              </p>
+              <ul id="passkey-list" class="passkey-list" hidden></ul>
+              <div id="passkey-actions" class="check-row wide fieldset-actions">
+                <sl-button id="passkey-add" type="button" size="small" variant="primary">Add passkey</sl-button>
+              </div>
+              <div id="passkey-delete-panel" class="grid" hidden>
+                <p class="hint wide">Confirm with your admin password to remove <strong id="passkey-delete-name"></strong>.</p>
+                <sl-input name="passkeyDeletePassword" type="password" autocomplete="current-password" label="Admin password" password-toggle></sl-input>
+                <div class="check-row wide fieldset-actions">
+                  <sl-button id="passkey-delete-confirm" type="button" size="small" variant="danger">Remove passkey</sl-button>
+                  <sl-button id="passkey-delete-cancel" type="button" size="small">Cancel</sl-button>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
               <legend>Authenticator app (OTP)</legend>
               <p id="totp-status" class="hint">Loading…</p>
               <p class="hint">
-                Optional until enabled. Once on, every admin sign-in needs your password and a code from an authenticator app (Google Authenticator, Authy, 1Password, etc.).
+                Optional until enabled. Once on, every admin sign-in needs your password and a code from an authenticator app (Google Authenticator, Authy, 1Password, etc.), unless you complete MFA with a passkey instead.
               </p>
               <div id="totp-setup-panel" class="totp-setup" hidden>
                 <img id="totp-qr" alt="Authenticator QR code" />

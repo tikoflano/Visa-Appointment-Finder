@@ -19,6 +19,11 @@ import "@shoelace-style/shoelace/dist/components/tab/tab.js";
 import "@shoelace-style/shoelace/dist/components/tab-group/tab-group.js";
 import "@shoelace-style/shoelace/dist/components/tab-panel/tab-panel.js";
 import "@shoelace-style/shoelace/dist/components/tooltip/tooltip.js";
+import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  startRegistration,
+} from "@simplewebauthn/browser";
 import "./app.css";
 
 registerSystemIconsFromSelf();
@@ -42,6 +47,11 @@ const probingIds = new Set();
 
 let loginMode = "user";
 let mfaStep = false;
+/** @type {{ passkey: boolean, totp: boolean }} */
+let mfaMethods = { passkey: false, totp: false };
+/** When both MFA methods exist, which UI to show on the MFA step. */
+let mfaUiMode = "passkey";
+let pendingPasskeyDeleteId = null;
 let sessionRole = null;
 let realSessionRole = null;
 let impersonating = false;
@@ -493,7 +503,10 @@ async function boot() {
     return;
   }
   if (session.mfaPending && isAdminPath()) {
-    await showLogin(false, { mfaPending: true });
+    await showLogin(false, {
+      mfaPending: true,
+      mfaMethods: session.mfaMethods,
+    });
     return;
   }
   if (session.setupRequired && !isAdminPath()) {
@@ -536,6 +549,13 @@ function applyLoginMode() {
   const password = $("#login-password");
   const totp = $("#login-totp");
   const confirm = $("#confirm-row");
+  const passkeyPanel = $("#login-passkey-panel");
+  const useTotp = $("#login-use-totp");
+  const usePasskey = $("#login-use-passkey");
+  const submit = $("#login-submit");
+  const showPasskeyUi = mfaStep && mfaMethods.passkey && mfaUiMode === "passkey";
+  const showTotpUi =
+    mfaStep && mfaMethods.totp && (!mfaMethods.passkey || mfaUiMode === "totp");
   email.hidden = mfaStep || loginMode !== "user";
   email.required = !mfaStep && loginMode === "user";
   password.hidden = mfaStep;
@@ -543,10 +563,27 @@ function applyLoginMode() {
   password.label =
     loginMode === "admin" ? "Admin password" : "Portal password";
   confirm.hidden = mfaStep || !setupMode;
-  totp.hidden = !mfaStep;
-  totp.required = mfaStep;
+  passkeyPanel.hidden = !showPasskeyUi;
+  useTotp.hidden = !(showPasskeyUi && mfaMethods.totp);
+  totp.hidden = !showTotpUi;
+  totp.required = showTotpUi;
+  usePasskey.hidden = !(showTotpUi && mfaMethods.passkey);
+  submit.hidden = showPasskeyUi;
   $("#setup-hint").hidden = mfaStep || !setupMode;
-  $("#mfa-hint").hidden = !mfaStep;
+  const hint = $("#mfa-hint");
+  if (!mfaStep) {
+    hint.hidden = true;
+  } else if (showPasskeyUi) {
+    hint.hidden = false;
+    hint.textContent = mfaMethods.totp
+      ? "Confirm with your passkey, or switch to an authenticator code."
+      : "Confirm with your passkey to finish signing in.";
+  } else {
+    hint.hidden = false;
+    hint.textContent = mfaMethods.passkey
+      ? "Enter the 6-digit code from your authenticator app, or switch to a passkey."
+      : "Enter the 6-digit code from your authenticator app.";
+  }
   if (mfaStep) $("#login-turnstile").hidden = true;
 }
 
@@ -564,8 +601,15 @@ async function showLogin(setupRequired, options = {}) {
   setupMode = !!setupRequired && adminPath;
   loginMode = adminPath ? "admin" : "user";
   mfaStep = !!options.mfaPending && loginMode === "admin";
+  mfaMethods = {
+    passkey: !!options.mfaMethods?.passkey,
+    totp: !!options.mfaMethods?.totp,
+  };
+  mfaUiMode = mfaMethods.passkey ? "passkey" : "totp";
   $(".login-title").textContent = mfaStep
-    ? "Authenticator"
+    ? mfaUiMode === "passkey"
+      ? "Passkey"
+      : "Authenticator"
     : setupMode
       ? "Create password"
       : "Sign in";
@@ -582,10 +626,22 @@ async function showLogin(setupRequired, options = {}) {
   applyLoginMode();
   if (mfaStep) {
     $("#login-turnstile").hidden = true;
-    $("#login-totp").focus?.();
+    if (mfaUiMode === "totp") $("#login-totp").focus?.();
   } else {
     await mountTurnstile("login-turnstile");
   }
+}
+
+async function completePasskeyLogin() {
+  if (!browserSupportsWebAuthn()) {
+    throw new Error("This browser does not support passkeys");
+  }
+  const { options } = await api("POST", "/api/login/passkey/options", {});
+  const response = await startAuthentication({ optionsJSON: options });
+  await api("POST", "/api/login/passkey/verify", { response });
+  mfaStep = false;
+  const session = await api("GET", "/api/session");
+  await applySession(session);
 }
 
 function hideAuthViews() {
@@ -722,6 +778,11 @@ $("#login-form").addEventListener("submit", async (event) => {
   setError(form);
   try {
     if (mfaStep) {
+      if (mfaUiMode === "passkey") {
+        await completePasskeyLogin();
+        form.reset();
+        return;
+      }
       await api("POST", "/api/login/totp", {
         code: named(form, "totp").value,
       });
@@ -748,7 +809,10 @@ $("#login-form").addEventListener("submit", async (event) => {
       if (result?.mfaRequired) {
         named(form, "password").value = "";
         named(form, "totp").value = "";
-        await showLogin(false, { mfaPending: true });
+        await showLogin(false, {
+          mfaPending: true,
+          mfaMethods: result.mfaMethods,
+        });
         return;
       }
     } else {
@@ -765,6 +829,35 @@ $("#login-form").addEventListener("submit", async (event) => {
     if (!mfaStep) resetTurnstile("login-turnstile");
     setError(form, error.message);
   }
+});
+
+$("#login-passkey").addEventListener("click", async () => {
+  const form = $("#login-form");
+  setError(form);
+  const button = $("#login-passkey");
+  button.disabled = true;
+  try {
+    await completePasskeyLogin();
+    form.reset();
+  } catch (error) {
+    setError(form, error.message || "Passkey sign-in failed");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#login-use-totp").addEventListener("click", () => {
+  mfaUiMode = "totp";
+  $(".login-title").textContent = "Authenticator";
+  $("#login-submit").textContent = "Verify";
+  applyLoginMode();
+  $("#login-totp").focus?.();
+});
+
+$("#login-use-passkey").addEventListener("click", () => {
+  mfaUiMode = "passkey";
+  $(".login-title").textContent = "Passkey";
+  applyLoginMode();
 });
 
 $("#register-form").addEventListener("submit", async (event) => {
@@ -1750,12 +1843,14 @@ async function refreshTotpSettingsUi() {
   try {
     const status = await api("GET", "/api/admin/totp");
     if (status.enabled) {
-      statusEl.textContent = "Authenticator is enabled. Admin sign-in requires a code.";
+      statusEl.textContent =
+        "Authenticator is enabled. Admin sign-in accepts a code (or a passkey if enrolled).";
       beginBtn.textContent = "Replace authenticator";
       beginBtn.hidden = false;
       disableBtn.hidden = false;
     } else {
-      statusEl.textContent = "Authenticator is off. Admin sign-in uses password only.";
+      statusEl.textContent =
+        "Authenticator is off. MFA still applies if a passkey is enrolled.";
       beginBtn.textContent = "Set up authenticator";
       beginBtn.hidden = false;
       disableBtn.hidden = true;
@@ -1767,10 +1862,90 @@ async function refreshTotpSettingsUi() {
   }
 }
 
+function formatPasskeyCreated(ms) {
+  if (!ms) return "";
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return "";
+  }
+}
+
+async function refreshPasskeySettingsUi() {
+  const statusEl = $("#passkey-status");
+  const listEl = $("#passkey-list");
+  const actions = $("#passkey-actions");
+  const addBtn = $("#passkey-add");
+  const deletePanel = $("#passkey-delete-panel");
+  deletePanel.hidden = true;
+  actions.hidden = false;
+  pendingPasskeyDeleteId = null;
+  listEl.innerHTML = "";
+  listEl.hidden = true;
+  try {
+    const result = await api("GET", "/api/admin/passkeys");
+    const passkeys = result.passkeys || [];
+    if (result.disabledInDev) {
+      statusEl.textContent =
+        "Passkey setup is disabled in dev mode (same as authenticator OTP).";
+      addBtn.disabled = true;
+      return;
+    }
+    if (!result.secureContext) {
+      statusEl.textContent =
+        "Passkeys need HTTPS or localhost. This origin cannot enroll or use them.";
+      addBtn.disabled = true;
+    } else if (!browserSupportsWebAuthn()) {
+      statusEl.textContent = "This browser does not support passkeys.";
+      addBtn.disabled = true;
+    } else if (!passkeys.length) {
+      statusEl.textContent = "No passkeys enrolled yet.";
+      addBtn.disabled = false;
+    } else {
+      statusEl.textContent = `${passkeys.length} passkey${
+        passkeys.length === 1 ? "" : "s"
+      } enrolled. Admin sign-in can use any of them after the password.`;
+      addBtn.disabled = false;
+      listEl.hidden = false;
+      for (const passkey of passkeys) {
+        const li = document.createElement("li");
+        const meta = document.createElement("div");
+        meta.className = "passkey-meta";
+        const title = document.createElement("strong");
+        title.textContent = passkey.nickname || `Passkey ${passkey.id}`;
+        const sub = document.createElement("span");
+        sub.className = "sub";
+        const created = formatPasskeyCreated(passkey.createdMs);
+        sub.textContent = created ? `Added ${created}` : `Id ${passkey.id}`;
+        meta.append(title, sub);
+        const remove = document.createElement("sl-button");
+        remove.type = "button";
+        remove.size = "small";
+        remove.variant = "danger";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          pendingPasskeyDeleteId = passkey.id;
+          $("#passkey-delete-name").textContent =
+            passkey.nickname || `Passkey ${passkey.id}`;
+          named(settingsForm, "passkeyDeletePassword").value = "";
+          deletePanel.hidden = false;
+          actions.hidden = true;
+          setError(settingsForm);
+        });
+        li.append(meta, remove);
+        listEl.append(li);
+      }
+    }
+  } catch (error) {
+    statusEl.textContent = error.message || "Could not load passkeys";
+    addBtn.disabled = true;
+  }
+}
+
 $("#open-settings").addEventListener("click", async () => {
   settingsForm.reset();
   setError(settingsForm);
-  await refreshTotpSettingsUi();
+  await Promise.all([refreshTotpSettingsUi(), refreshPasskeySettingsUi()]);
   const settings = await api("GET", "/api/settings");
   for (const field of [
     "gmailUser",
@@ -2025,6 +2200,66 @@ async function sendNotificationTest(channel, button) {
     button.loading = false;
   }
 }
+
+$("#passkey-add").addEventListener("click", async () => {
+  setError(settingsForm);
+  const button = $("#passkey-add");
+  if (!browserSupportsWebAuthn()) {
+    setError(settingsForm, "This browser does not support passkeys");
+    return;
+  }
+  button.loading = true;
+  try {
+    const { options } = await api(
+      "POST",
+      "/api/admin/passkeys/register/options",
+      {},
+    );
+    const response = await startRegistration({ optionsJSON: options });
+    await api("POST", "/api/admin/passkeys/register/verify", {
+      response,
+      nickname: "",
+    });
+    toast("Passkey added", "success");
+    await refreshPasskeySettingsUi();
+  } catch (error) {
+    const message =
+      error?.name === "NotAllowedError"
+        ? "Passkey enrollment was cancelled"
+        : error.message || "Could not add passkey";
+    setError(settingsForm, message);
+  } finally {
+    button.loading = false;
+  }
+});
+
+$("#passkey-delete-cancel").addEventListener("click", async () => {
+  $("#passkey-delete-panel").hidden = true;
+  $("#passkey-actions").hidden = false;
+  pendingPasskeyDeleteId = null;
+  await refreshPasskeySettingsUi();
+});
+
+$("#passkey-delete-confirm").addEventListener("click", async () => {
+  setError(settingsForm);
+  if (pendingPasskeyDeleteId == null) return;
+  const button = $("#passkey-delete-confirm");
+  button.loading = true;
+  try {
+    await api("POST", `/api/admin/passkeys/${pendingPasskeyDeleteId}/delete`, {
+      password: named(settingsForm, "passkeyDeletePassword").value,
+    });
+    $("#passkey-delete-panel").hidden = true;
+    $("#passkey-actions").hidden = false;
+    pendingPasskeyDeleteId = null;
+    toast("Passkey removed", "success");
+    await refreshPasskeySettingsUi();
+  } catch (error) {
+    setError(settingsForm, error.message);
+  } finally {
+    button.loading = false;
+  }
+});
 
 $("#totp-begin-setup").addEventListener("click", async () => {
   setError(settingsForm);

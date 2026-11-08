@@ -9,6 +9,7 @@ const USAGE = `Usage:
   node build/server/cli.js generate-key [path]
   node build/server/cli.js set-password
   node build/server/cli.js disable-totp
+  node build/server/cli.js disable-passkeys
   node build/server/cli.js dump`;
 
 function prompt(question: string, hidden: boolean): Promise<string> {
@@ -68,10 +69,25 @@ async function disableTotp(store: Store) {
   console.log("Authenticator OTP disabled. Admin login is password-only again.");
 }
 
+async function disablePasskeys(store: Store) {
+  const removed = await store.disableAdminPasskeys();
+  if (!removed) {
+    console.log("No admin passkeys were registered");
+    return;
+  }
+  console.log(
+    `Removed ${removed} admin passkey${removed === 1 ? "" : "s"}. ` +
+      (await store.isAdminTotpEnabled()
+        ? "Authenticator OTP is still enabled for MFA."
+        : "Admin login is password-only again unless TOTP is enabled."),
+  );
+}
+
 async function dump(store: Store) {
   const settings = await store.getSettings();
   const profiles = await store.listProfiles();
   const totp = await store.getAdminTotpStatus();
+  const passkeys = await store.listAdminPasskeys();
   const payload = {
     settings: {
       ...settings,
@@ -79,6 +95,8 @@ async function dump(store: Store) {
       openwaApiKey: await store.getOpenwaApiKey(),
       adminTotpEnabled: totp.enabled,
       adminTotpPending: totp.pending,
+      adminPasskeyCount: passkeys.length,
+      adminPasskeys: passkeys,
     },
     profiles: await Promise.all(
       profiles.map(async (profile) => ({
@@ -93,7 +111,13 @@ async function dump(store: Store) {
 (async () => {
   const [command, ...args] = process.argv.slice(2);
   if (
-    !["generate-key", "set-password", "disable-totp", "dump"].includes(command)
+    ![
+      "generate-key",
+      "set-password",
+      "disable-totp",
+      "disable-passkeys",
+      "dump",
+    ].includes(command)
   ) {
     throw Error(USAGE);
   }
@@ -109,6 +133,7 @@ async function dump(store: Store) {
     await store.initialize();
     if (command === "set-password") await setPassword(store);
     if (command === "disable-totp") await disableTotp(store);
+    if (command === "disable-passkeys") await disablePasskeys(store);
     if (command === "dump") await dump(store);
   } finally {
     await db.close();

@@ -29,6 +29,14 @@ import {
   verifyTotp,
 } from "./totp";
 import {
+  beginAdminPasskeyAuthentication,
+  beginAdminPasskeyRegistration,
+  finishAdminPasskeyAuthentication,
+  finishAdminPasskeyRegistration,
+  webAuthnSecureContextOk,
+  WebAuthnError,
+} from "./webauthn";
+import {
   configuredOpenwaBaseUrl,
   ensureOpenwaSession,
   OpenwaClient,
@@ -507,12 +515,24 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     };
   };
 
+  const adminMfaMethods = async (): Promise<{
+    passkey: boolean;
+    totp: boolean;
+  }> => {
+    if (DEV) return { passkey: false, totp: false };
+    return {
+      passkey: await store.hasAdminPasskeys(),
+      totp: await store.isAdminTotpEnabled(),
+    };
+  };
+
   const sessionPayload = async (
     req: http.IncomingMessage,
     session: SessionRecord | null,
   ) => {
     const setupRequired = !DEV && !(await store.hasAdminPassword());
-    const mfaEnabled = DEV ? false : await store.isAdminTotpEnabled();
+    const mfaMethods = await adminMfaMethods();
+    const mfaEnabled = mfaMethods.passkey || mfaMethods.totp;
     if (DEV && !session) {
       return {
         authenticated: true,
@@ -523,6 +543,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         portalAccessEnabled: true,
         mfaEnabled: false,
         mfaPending: false,
+        mfaMethods: { passkey: false, totp: false },
         turnstileSiteKey: turnstileSiteKey(),
         turnstileRequired: false,
       };
@@ -536,6 +557,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         impersonating: false,
         mfaEnabled: true,
         mfaPending: true,
+        mfaMethods,
         turnstileSiteKey: turnstileSiteKey(),
         turnstileRequired: turnstileRequired(),
       };
@@ -549,6 +571,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         impersonating: false,
         mfaEnabled,
         mfaPending: false,
+        mfaMethods,
         turnstileSiteKey: turnstileSiteKey(),
         turnstileRequired: turnstileRequired(),
       };
@@ -572,6 +595,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           impersonating: false,
           mfaEnabled,
           mfaPending: false,
+          mfaMethods,
           turnstileSiteKey: turnstileSiteKey(),
           turnstileRequired: turnstileRequired(),
         };
@@ -593,6 +617,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       portalAccessEnabled,
       mfaEnabled,
       mfaPending: false,
+      mfaMethods,
       turnstileSiteKey: turnstileSiteKey(),
       turnstileRequired: turnstileRequired(),
     };
@@ -690,9 +715,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           await sleep(1000);
           throw new HttpError(401, "Wrong password");
         }
-        // Clear password failures; TOTP failures use the same lockout after this.
+        // Clear password failures; MFA failures use the same lockout after this.
         adminLoginLockout.clear(ip);
-        if (!DEV && (await store.isAdminTotpEnabled())) {
+        const mfaMethods = await adminMfaMethods();
+        if (!DEV && (mfaMethods.passkey || mfaMethods.totp)) {
           const pending = sessions.create({
             role: "admin",
             mfaPending: true,
@@ -706,14 +732,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
               requestIsHttps(req),
             ),
           );
-          return { ok: true, mfaRequired: true };
+          return { ok: true, mfaRequired: true, mfaMethods };
         }
         const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
           sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
         );
-        return { ok: true, mfaRequired: false };
+        return { ok: true, mfaRequired: false, mfaMethods };
       },
     },
     {
@@ -741,6 +767,99 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         }
         adminLoginLockout.clear(ip);
         sessions.destroy(getCookie(req, "sid"));
+        const token = sessions.create({ role: "admin" });
+        res.setHeader(
+          "Set-Cookie",
+          sessionCookie(token, SESSION_TTL_MS / 1000, requestIsHttps(req)),
+        );
+        return { ok: true };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/login\/passkey\/options$/,
+      public: true,
+      handler: async ({ req, session }) => {
+        assertAdminIpAllowed(req);
+        const ip = clientIp(req);
+        if (adminLoginLockout.isLocked(ip)) {
+          throw new HttpError(429, "Too many failed attempts, try later");
+        }
+        if (!session?.mfaPending || session.role !== "admin") {
+          throw new HttpError(401, "Password step required first");
+        }
+        const sid = getCookie(req, "sid");
+        if (!sid) throw new HttpError(401, "Password step required first");
+        try {
+          const options = await beginAdminPasskeyAuthentication({
+            req,
+            challengeKey: `auth:${sid}`,
+            allowCredentials: await store.listAdminPasskeyDescriptors(),
+          });
+          return { options };
+        } catch (error) {
+          if (error instanceof WebAuthnError) {
+            throw new HttpError(error.status, error.message);
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/login\/passkey\/verify$/,
+      public: true,
+      handler: async ({ req, res, body, session }) => {
+        assertAdminIpAllowed(req);
+        const ip = clientIp(req);
+        if (adminLoginLockout.isLocked(ip)) {
+          throw new HttpError(429, "Too many failed attempts, try later");
+        }
+        if (!session?.mfaPending || session.role !== "admin") {
+          throw new HttpError(401, "Password step required first");
+        }
+        const sid = getCookie(req, "sid");
+        if (!sid) throw new HttpError(401, "Password step required first");
+        const credentialId = String(body?.response?.id ?? "");
+        const stored = credentialId
+          ? await store.getAdminPasskeyByCredentialId(credentialId)
+          : null;
+        if (!stored) {
+          if (adminLoginLockout.recordFailure(ip)) {
+            maybeNotifyAdminLockout(ip);
+          }
+          await sleep(1000);
+          throw new HttpError(401, "Unknown passkey");
+        }
+        try {
+          const result = await finishAdminPasskeyAuthentication({
+            req,
+            challengeKey: `auth:${sid}`,
+            response: body.response,
+            credential: stored,
+          });
+          await store.updateAdminPasskeyCounter(
+            stored.credentialId,
+            result.newCounter,
+          );
+        } catch (error) {
+          if (error instanceof WebAuthnError) {
+            if (error.status === 401) {
+              if (adminLoginLockout.recordFailure(ip)) {
+                maybeNotifyAdminLockout(ip);
+              }
+              await sleep(1000);
+            }
+            throw new HttpError(error.status, error.message);
+          }
+          if (adminLoginLockout.recordFailure(ip)) {
+            maybeNotifyAdminLockout(ip);
+          }
+          await sleep(1000);
+          throw new HttpError(401, "Passkey verification failed");
+        }
+        adminLoginLockout.clear(ip);
+        sessions.destroy(sid);
         const token = sessions.create({ role: "admin" });
         res.setHeader(
           "Set-Cookie",
@@ -1512,6 +1631,112 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     },
     {
       method: "GET",
+      pattern: /^\/api\/admin\/passkeys$/,
+      handler: async ({ req }) => {
+        const secureContext = webAuthnSecureContextOk(req);
+        if (DEV) {
+          return { passkeys: [], secureContext, disabledInDev: true };
+        }
+        return {
+          passkeys: await store.listAdminPasskeys(),
+          secureContext,
+        };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/passkeys\/register\/options$/,
+      handler: async ({ req, session }) => {
+        if (DEV) {
+          throw new HttpError(400, "Passkey setup is disabled in dev mode");
+        }
+        const sid = getCookie(req, "sid");
+        if (!sid || !isFullAdminSession(session)) {
+          throw new HttpError(401, "Not authenticated");
+        }
+        try {
+          const options = await beginAdminPasskeyRegistration({
+            req,
+            challengeKey: `reg:${sid}`,
+            existing: await store.listAdminPasskeyDescriptors(),
+          });
+          return { options };
+        } catch (error) {
+          if (error instanceof WebAuthnError) {
+            throw new HttpError(error.status, error.message);
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/passkeys\/register\/verify$/,
+      handler: async ({ req, body, session }) => {
+        if (DEV) {
+          throw new HttpError(400, "Passkey setup is disabled in dev mode");
+        }
+        const sid = getCookie(req, "sid");
+        if (!sid || !isFullAdminSession(session)) {
+          throw new HttpError(401, "Not authenticated");
+        }
+        try {
+          const enrolled = await finishAdminPasskeyRegistration({
+            req,
+            challengeKey: `reg:${sid}`,
+            response: body.response,
+          });
+          const nickname = String(body.nickname ?? "").trim() || undefined;
+          const passkey = await store.addAdminPasskey({
+            credentialId: enrolled.credentialId,
+            publicKey: enrolled.publicKey,
+            counter: enrolled.counter,
+            transports: enrolled.transports,
+            deviceType: enrolled.deviceType,
+            backedUp: enrolled.backedUp,
+            nickname,
+          });
+          return { ok: true, passkey };
+        } catch (error) {
+          if (error instanceof WebAuthnError) {
+            throw new HttpError(error.status, error.message);
+          }
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            (error as { code?: string }).code === "SQLITE_CONSTRAINT"
+          ) {
+            throw new HttpError(409, "That passkey is already registered");
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/admin\/passkeys\/(\d+)\/delete$/,
+      handler: async ({ body, params }) => {
+        const id = Number(params[0]);
+        if (!Number.isFinite(id)) throw new HttpError(400, "Invalid passkey id");
+        const password = String(body.password ?? "");
+        if (
+          !password ||
+          !(await store.verifyAdminPassword(password))
+        ) {
+          await sleep(500);
+          throw new HttpError(401, "Current password required");
+        }
+        const deleted = await store.deleteAdminPasskey(id);
+        if (!deleted) throw new HttpError(404, "Passkey not found");
+        return {
+          ok: true,
+          remaining: await store.listAdminPasskeys(),
+        };
+      },
+    },
+    {
+      method: "GET",
       pattern: /^\/api\/settings$/,
       handler: async () => store.getSettings(),
     },
@@ -1764,6 +1989,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           https,
         );
       } else if (error instanceof HttpError) {
+        sendJson(res, error.status, { error: error.message }, https);
+      } else if (error instanceof WebAuthnError) {
         sendJson(res, error.status, { error: error.message }, https);
       } else if (error instanceof ValidationError) {
         sendJson(res, 400, { error: error.message }, https);

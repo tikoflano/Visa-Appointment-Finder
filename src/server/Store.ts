@@ -323,6 +323,40 @@ function readOpenwaApiKeyFile(): string {
 
 export class ValidationError extends Error {}
 
+/** Public metadata for an admin passkey (safe to return to the UI). */
+export interface AdminPasskeyMeta {
+  id: number;
+  nickname: string;
+  deviceType: string;
+  backedUp: boolean;
+  createdMs: number;
+  transports: string[] | null;
+}
+
+/** Full credential row used for WebAuthn assertion verification. */
+export interface AdminPasskeyCredential {
+  id: number;
+  credentialId: string;
+  publicKey: Buffer;
+  counter: number;
+  transports: string[] | null;
+  deviceType: string;
+  backedUp: boolean;
+  nickname: string;
+  createdMs: number;
+}
+
+function parseTransportsJson(raw: string | null | undefined): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((item) => String(item));
+  } catch {
+    return null;
+  }
+}
+
 export async function openDatabase(): Promise<Db> {
   const db = await open({
     filename: process.env.DB_PATH || "./db.sqlite",
@@ -431,6 +465,18 @@ export class Store {
         ON portal_audit (id DESC);
       CREATE INDEX IF NOT EXISTS portal_audit_profile_idx
         ON portal_audit (profile_id, id DESC);
+
+      CREATE TABLE IF NOT EXISTS admin_webauthn_credential (
+        id INTEGER PRIMARY KEY,
+        credential_id TEXT NOT NULL UNIQUE,
+        public_key BLOB NOT NULL,
+        counter INTEGER NOT NULL DEFAULT 0,
+        transports TEXT,
+        device_type TEXT NOT NULL DEFAULT 'singleDevice',
+        backed_up INTEGER NOT NULL DEFAULT 0,
+        nickname TEXT NOT NULL DEFAULT '',
+        created_ms INTEGER NOT NULL
+      );
     `);
 
     const profileColumns: { name: string }[] = await this.db.all(
@@ -912,6 +958,155 @@ export class Store {
     await this.setRawSetting("admin_totp_secret_enc", "");
     await this.setRawSetting("admin_totp_pending_enc", "");
     await this.setRawSetting("admin_totp_last_counter", "");
+  }
+
+  // ---- Admin WebAuthn passkeys ----
+
+  async hasAdminPasskeys(): Promise<boolean> {
+    const row = await this.db.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM admin_webauthn_credential",
+    );
+    return (row?.n ?? 0) > 0;
+  }
+
+  async listAdminPasskeys(): Promise<AdminPasskeyMeta[]> {
+    const rows: {
+      id: number;
+      nickname: string;
+      device_type: string;
+      backed_up: number;
+      created_ms: number;
+      transports: string | null;
+    }[] = await this.db.all(
+      `SELECT id, nickname, device_type, backed_up, created_ms, transports
+       FROM admin_webauthn_credential
+       ORDER BY created_ms ASC, id ASC`,
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      nickname: row.nickname || `Passkey ${row.id}`,
+      deviceType: row.device_type || "singleDevice",
+      backedUp: !!row.backed_up,
+      createdMs: row.created_ms,
+      transports: parseTransportsJson(row.transports),
+    }));
+  }
+
+  async listAdminPasskeyDescriptors(): Promise<
+    Array<{ credentialId: string; transports: string[] | null }>
+  > {
+    const rows: {
+      credential_id: string;
+      transports: string | null;
+    }[] = await this.db.all(
+      `SELECT credential_id, transports
+       FROM admin_webauthn_credential
+       ORDER BY created_ms ASC, id ASC`,
+    );
+    return rows.map((row) => ({
+      credentialId: row.credential_id,
+      transports: parseTransportsJson(row.transports),
+    }));
+  }
+
+  async getAdminPasskeyByCredentialId(
+    credentialId: string,
+  ): Promise<AdminPasskeyCredential | null> {
+    const row = await this.db.get<{
+      id: number;
+      credential_id: string;
+      public_key: Buffer;
+      counter: number;
+      transports: string | null;
+      device_type: string;
+      backed_up: number;
+      nickname: string;
+      created_ms: number;
+    }>(
+      `SELECT id, credential_id, public_key, counter, transports,
+              device_type, backed_up, nickname, created_ms
+       FROM admin_webauthn_credential
+       WHERE credential_id = ?`,
+      [credentialId],
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      credentialId: row.credential_id,
+      publicKey: Buffer.isBuffer(row.public_key)
+        ? row.public_key
+        : Buffer.from(row.public_key as any),
+      counter: row.counter,
+      transports: parseTransportsJson(row.transports),
+      deviceType: row.device_type || "singleDevice",
+      backedUp: !!row.backed_up,
+      nickname: row.nickname || "",
+      createdMs: row.created_ms,
+    };
+  }
+
+  async addAdminPasskey(input: {
+    credentialId: string;
+    publicKey: Buffer | Uint8Array;
+    counter: number;
+    transports?: string[] | null;
+    deviceType?: string;
+    backedUp?: boolean;
+    nickname?: string;
+  }): Promise<AdminPasskeyMeta> {
+    const nickname = String(input.nickname || "").trim() || "Passkey";
+    const createdMs = Date.now();
+    const transportsJson =
+      input.transports && input.transports.length
+        ? JSON.stringify(input.transports)
+        : null;
+    const result = await this.db.run(
+      `INSERT INTO admin_webauthn_credential
+        (credential_id, public_key, counter, transports, device_type, backed_up, nickname, created_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.credentialId,
+        Buffer.from(input.publicKey),
+        input.counter,
+        transportsJson,
+        input.deviceType || "singleDevice",
+        input.backedUp ? 1 : 0,
+        nickname,
+        createdMs,
+      ],
+    );
+    const id = Number(result.lastID);
+    return {
+      id,
+      nickname,
+      deviceType: input.deviceType || "singleDevice",
+      backedUp: !!input.backedUp,
+      createdMs,
+      transports: input.transports?.length ? [...input.transports] : null,
+    };
+  }
+
+  async updateAdminPasskeyCounter(
+    credentialId: string,
+    counter: number,
+  ): Promise<void> {
+    await this.db.run(
+      "UPDATE admin_webauthn_credential SET counter = ? WHERE credential_id = ?",
+      [counter, credentialId],
+    );
+  }
+
+  async deleteAdminPasskey(id: number): Promise<boolean> {
+    const result = await this.db.run(
+      "DELETE FROM admin_webauthn_credential WHERE id = ?",
+      [id],
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  async disableAdminPasskeys(): Promise<number> {
+    const result = await this.db.run("DELETE FROM admin_webauthn_credential");
+    return result.changes ?? 0;
   }
 
   // ---- Profiles ----
