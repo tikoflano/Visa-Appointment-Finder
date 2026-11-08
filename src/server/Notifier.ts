@@ -684,6 +684,11 @@ export class Notifier {
       return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
     }
 
+    const report = await this.store.getHeartbeatReport();
+    if (!report.enabledProfiles.length) {
+      return { sent: false, lastHeartbeatAt: settings.lastHeartbeatAt };
+    }
+
     const now = new Date();
     const slot = latestHeartbeatSlot(now, settings.heartbeatTimeUtc || "00:00");
     const slotIso = slot.toISOString();
@@ -699,6 +704,7 @@ export class Notifier {
         adminEmail,
         adminWhatsapp,
         settings,
+        report,
       });
     } catch (error) {
       const delay = heartbeatRetryDelayMinutes(claim.attemptNumber);
@@ -723,10 +729,11 @@ export class Notifier {
     adminEmail: string;
     adminWhatsapp: string[];
     settings: Settings;
+    report?: Awaited<ReturnType<Store["getHeartbeatReport"]>>;
   }): Promise<void> {
     const { emailReady, whatsappReady, adminEmail, adminWhatsapp, settings } =
       options;
-    const report = await this.store.getHeartbeatReport();
+    const report = options.report ?? (await this.store.getHeartbeatReport());
     const content = composeHeartbeatNotification({ report });
     let anySent = false;
     let lastError: string | null = null;

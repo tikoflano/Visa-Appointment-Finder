@@ -1054,6 +1054,11 @@ async function refresh() {
         (wantsWhatsapp || partialOpenwa) &&
         !openwaReady,
     );
+    setBanner(
+      "#heartbeat-profiles-warning",
+      !!settings.heartbeatEnabled &&
+        !profileList.some((profile) => profile.enabled),
+    );
     setQueueWarning();
     if (!isLivePath()) renderProfiles();
   } catch (error) {
